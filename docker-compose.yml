@@ -1,0 +1,94 @@
+services:
+  secrets-init:
+    image: alpine:3.21
+    environment:
+      POSTGRES_PASSWORD_OVERRIDE: ${POSTGRES_PASSWORD:-}
+      JWT_SECRET_OVERRIDE: ${JWT_SECRET:-}
+      API_KEY_PEPPER_OVERRIDE: ${API_KEY_PEPPER:-}
+    volumes:
+      - runtime_secrets:/run/generated-secrets
+      - ./docker/initialize-secrets.sh:/usr/local/bin/initialize-secrets:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/initialize-secrets"]
+    restart: "no"
+    network_mode: none
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bypass}
+      POSTGRES_USER: ${POSTGRES_USER:-bypass}
+      POSTGRES_PASSWORD_FILE: /run/generated-secrets/postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - runtime_secrets:/run/generated-secrets:ro
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks: [database]
+
+  backend:
+    build: ./backend
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DATABASE_URL: ${DATABASE_URL:-}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-bypass}
+      POSTGRES_USER: ${POSTGRES_USER:-bypass}
+      POSTGRES_PASSWORD_FILE: /run/generated-secrets/postgres_password
+      JWT_SECRET_FILE: /run/generated-secrets/jwt_secret
+      API_KEY_PEPPER_FILE: /run/generated-secrets/api_key_pepper
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-60}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      EXPIRING_SOON_DAYS: ${EXPIRING_SOON_DAYS:-7}
+      EVALUATE_RATE_LIMIT_PER_MINUTE: ${EVALUATE_RATE_LIMIT_PER_MINUTE:-120}
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-ChangeMeNow!2026}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@example.com}
+      INITIAL_ADMIN_DISPLAY_NAME: ${INITIAL_ADMIN_DISPLAY_NAME:-Initial Administrator}
+    volumes:
+      - runtime_secrets:/run/generated-secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks: [application, database]
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-3000}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks: [application]
+
+networks:
+  application:
+  database:
+    internal: true
+
+volumes:
+  postgres_data:
+  runtime_secrets:
