@@ -17,3 +17,4 @@ jobs:
   differential-security:
     name: Differential security
     uses: kanedasec/platform-workflows/.github/workflows/security-differential.yaml@463bfd537c536a12c8479b4b1b8ff712a4dc0b21
+    secrets: inherit
