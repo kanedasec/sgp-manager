@@ -1,0 +1,196 @@
+name: Security
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      SEMGREP_SEND_METRICS: "off"
+
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: python -m pip install --disable-pip-version-check semgrep==1.175.0
+
+      - name: Scan changed code
+        run: |
+          report_dir="$RUNNER_TEMP/security-reports"
+          mkdir -p "$report_dir"
+          semgrep scan \
+            --config p/default \
+            --baseline-commit "$BASE_SHA" \
+            --json \
+            --output "$report_dir/semgrep.json" \
+            --error \
+            .
+
+      - name: Upload Semgrep report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: semgrep-report
+          path: ${{ runner.temp }}/security-reports/semgrep.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  secrets:
+    name: Secrets (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GITLEAKS_VERSION: 8.30.0
+      GITLEAKS_SHA256: 79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e
+
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install Gitleaks
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          bin_dir="$RUNNER_TEMP/bin"
+          mkdir -p "$bin_dir"
+          curl --fail --location --silent --show-error \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "$archive"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$bin_dir" gitleaks
+          chmod 0755 "$bin_dir/gitleaks"
+          echo "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Scan pull request commits
+        run: |
+          report_dir="$RUNNER_TEMP/security-reports"
+          mkdir -p "$report_dir"
+          gitleaks git \
+            --log-opts="${BASE_SHA}..${HEAD_SHA}" \
+            --report-format json \
+            --report-path "$report_dir/gitleaks.json" \
+            --redact=100 \
+            --no-banner \
+            .
+
+      - name: Upload redacted Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gitleaks-report
+          path: ${{ runner.temp }}/security-reports/gitleaks.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  sca:
+    name: SCA (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      TRIVY_VERSION: 0.74.0
+      TRIVY_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Trivy
+        run: |
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+          bin_dir="$RUNNER_TEMP/bin"
+          mkdir -p "$bin_dir"
+          curl --fail --location --silent --show-error \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            --output "$archive"
+          echo "${TRIVY_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$bin_dir" trivy
+          chmod 0755 "$bin_dir/trivy"
+          echo "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Scan base and pull request dependencies
+        run: |
+          base_dir="$RUNNER_TEMP/trivy-base"
+          report_dir="$RUNNER_TEMP/security-reports"
+          mkdir -p "$report_dir"
+          git worktree add --detach "$base_dir" "$BASE_SHA"
+
+          (
+            cd "$base_dir"
+            trivy fs \
+              --scanners vuln \
+              --format json \
+              --output "$report_dir/trivy-base.json" \
+              --no-progress \
+              .
+          )
+
+          trivy fs \
+            --scanners vuln \
+            --format json \
+            --output "$report_dir/trivy-head.json" \
+            --no-progress \
+            --skip-db-update \
+            .
+
+      - name: Gate on new high or critical vulnerabilities
+        run: |
+          report_dir="$RUNNER_TEMP/security-reports"
+          python scripts/ci/trivy_diff.py \
+            --base "$report_dir/trivy-base.json" \
+            --head "$report_dir/trivy-head.json" \
+            --output "$report_dir/trivy-delta.json" \
+            --fail-on HIGH,CRITICAL
+
+      - name: Upload Trivy differential report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-report
+          path: ${{ runner.temp }}/security-reports/trivy-delta.json
+          if-no-files-found: warn
+          retention-days: 7
