@@ -99,6 +99,7 @@ jobs:
           report_dir="$RUNNER_TEMP/security-reports"
           mkdir -p "$report_dir"
           gitleaks git \
+            --config scripts/ci/gitleaks.toml \
             --log-opts="${BASE_SHA}..${HEAD_SHA}" \
             --report-format json \
             --report-path "$report_dir/gitleaks.json" \
