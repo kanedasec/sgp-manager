@@ -51,7 +51,6 @@ jobs:
             --baseline-commit "$BASE_SHA" \
             --json \
             --output "$report_dir/semgrep.json" \
-            --error \
             .
 
       - name: Upload Semgrep report
@@ -100,10 +99,12 @@ jobs:
           report_dir="$RUNNER_TEMP/security-reports"
           mkdir -p "$report_dir"
           gitleaks git \
+            --config scripts/ci/gitleaks.toml \
             --log-opts="${BASE_SHA}..${HEAD_SHA}" \
             --report-format json \
             --report-path "$report_dir/gitleaks.json" \
             --redact=100 \
+            --exit-code=0 \
             --no-banner \
             .
 
@@ -177,14 +178,14 @@ jobs:
             --skip-db-update \
             .
 
-      - name: Gate on new high or critical vulnerabilities
+      - name: Create differential Trivy report
         run: |
           report_dir="$RUNNER_TEMP/security-reports"
           python scripts/ci/trivy_diff.py \
             --base "$report_dir/trivy-base.json" \
             --head "$report_dir/trivy-head.json" \
             --output "$report_dir/trivy-delta.json" \
-            --fail-on HIGH,CRITICAL
+            --fail-on ""
 
       - name: Upload Trivy differential report
         if: always()
@@ -192,5 +193,95 @@ jobs:
         with:
           name: trivy-report
           path: ${{ runner.temp }}/security-reports/trivy-delta.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  policy-gate:
+    name: Security policy (SGP Manager)
+    needs:
+      - sast
+      - secrets
+      - sca
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: security-policy
+
+    permissions:
+      actions: read
+      contents: read
+
+    env:
+      SGP_MANAGER_URL: ${{ vars.SGP_MANAGER_URL }}
+      SGP_APPLICATION: ${{ vars.SGP_APPLICATION }}
+
+    steps:
+      - name: Check out trusted policy consumer
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Download Semgrep report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: semgrep-report
+          path: ${{ runner.temp }}/security-reports
+
+      - name: Download Gitleaks report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gitleaks-report
+          path: ${{ runner.temp }}/security-reports
+
+      - name: Download Trivy report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: trivy-report
+          path: ${{ runner.temp }}/security-reports
+
+      - name: Apply SGP Manager gate policies
+        env:
+          SGP_MANAGER_API_KEY: ${{ secrets.SGP_MANAGER_API_KEY }}
+        run: |
+          if [[ -z "$SGP_MANAGER_URL" || -z "$SGP_APPLICATION" ]]; then
+            echo "SGP_MANAGER_URL and SGP_APPLICATION must be configured"
+            exit 2
+          fi
+
+          report_dir="$RUNNER_TEMP/security-reports"
+          decision_dir="$RUNNER_TEMP/policy-decisions"
+          status=0
+
+          run_gate() {
+            local gate="$1"
+            local scanner="$2"
+            local report="$3"
+            local result=0
+
+            python scripts/ci/security_gate.py \
+              --manager-url "$SGP_MANAGER_URL" \
+              --application "$SGP_APPLICATION" \
+              --gate "$gate" \
+              --scanner "$scanner" \
+              --report "$report_dir/$report" \
+              --decision-output "$decision_dir/$gate.json" || result=$?
+
+            if (( result > status )); then
+              status=$result
+            fi
+          }
+
+          run_gate sast semgrep semgrep.json
+          run_gate secrets gitleaks gitleaks.json
+          run_gate sca trivy trivy-delta.json
+          exit "$status"
+
+      - name: Upload SGP Manager decisions
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sgp-policy-decisions
+          path: ${{ runner.temp }}/policy-decisions/*.json
           if-no-files-found: warn
           retention-days: 7
