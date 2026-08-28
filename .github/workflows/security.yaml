@@ -16,5 +16,20 @@ concurrency:
 jobs:
   differential-security:
     name: Differential security
-    uses: kanedasec/platform-workflows/.github/workflows/security-differential.yaml@463bfd537c536a12c8479b4b1b8ff712a4dc0b21
-    secrets: inherit
+    uses: kanedasec/platform-workflows/.github/workflows/security-differential.yaml@5033239ab1a406704cdb8c0184284b5e17aebe6c
+
+  policy-gate:
+    name: Security policy (SGP Manager)
+    needs: differential-security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: security-policy
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Apply centralized security policies
+        uses: kanedasec/platform-workflows/actions/sgp-policy-from-artifacts@5033239ab1a406704cdb8c0184284b5e17aebe6c
+        env:
+          SGP_MANAGER_API_KEY: ${{ secrets.SGP_MANAGER_API_KEY }}
