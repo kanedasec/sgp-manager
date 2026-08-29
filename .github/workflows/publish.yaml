@@ -17,7 +17,31 @@ concurrency:
 jobs:
   containers:
     name: Application containers
-    uses: kanedasec/platform-workflows/.github/workflows/container-publish.yaml@44ea8d785e19ea2f2faea0fa76efd89250ce02a6
+    uses: kanedasec/platform-workflows/.github/workflows/container-publish.yaml@d2f64a7d70a3112c7a99687e60963be804306a31
     with:
       images: >-
         [{"name":"backend","context":"./backend","dockerfile":"./backend/Dockerfile"},{"name":"frontend","context":"./frontend","dockerfile":"./frontend/Dockerfile"}]
+
+  deploy:
+    name: Development deployment
+    needs: containers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: development
+    permissions:
+      contents: read
+    steps:
+      - name: Deploy immutable containers
+        uses: kanedasec/platform-workflows/actions/tailscale-ssh-deploy@d2f64a7d70a3112c7a99687e60963be804306a31
+        with:
+          oauth_client_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth_secret: ${{ secrets.TS_OAUTH_SECRET }}
+          ssh_private_key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          target_host: ${{ vars.DEPLOY_HOST }}
+          target_user: ${{ vars.DEPLOY_USER }}
+          known_hosts: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          deploy_command: ${{ vars.DEPLOY_COMMAND }}
+          image_tag: sha-${{ github.sha }}
+          public_url: ${{ vars.DEPLOY_URL }}
+          readiness_path: /ready
