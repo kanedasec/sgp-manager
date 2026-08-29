@@ -1,0 +1,23 @@
+name: Publish containers
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  containers:
+    name: Application containers
+    uses: kanedasec/platform-workflows/.github/workflows/container-publish.yaml@44ea8d785e19ea2f2faea0fa76efd89250ce02a6
+    with:
+      images: >-
+        [{"name":"backend","context":"./backend","dockerfile":"./backend/Dockerfile"},{"name":"frontend","context":"./frontend","dockerfile":"./frontend/Dockerfile"}]
