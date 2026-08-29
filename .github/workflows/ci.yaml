@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD
 
 on:
   pull_request:
@@ -13,13 +13,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-cd-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   standard-ci:
     name: Standard CI
-    uses: kanedasec/platform-workflows/.github/workflows/ci-python-node.yaml@463bfd537c536a12c8479b4b1b8ff712a4dc0b21
+    uses: kanedasec/platform-workflows/.github/workflows/ci-python-node.yaml@d2f64a7d70a3112c7a99687e60963be804306a31
     with:
       python_version: "3.12"
       python_working_directory: backend
@@ -33,3 +33,40 @@ jobs:
       node_lockfile: frontend/package-lock.json
       node_run_tests: false
       node_build_script: build
+
+  containers:
+    name: Application containers
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: standard-ci
+    permissions:
+      contents: read
+      packages: write
+    uses: kanedasec/platform-workflows/.github/workflows/container-publish.yaml@d2f64a7d70a3112c7a99687e60963be804306a31
+    with:
+      images: >-
+        [{"name":"backend","context":"./backend","dockerfile":"./backend/Dockerfile"},{"name":"frontend","context":"./frontend","dockerfile":"./frontend/Dockerfile"}]
+
+  deploy:
+    name: Development deployment
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: containers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: development
+    permissions:
+      contents: read
+    steps:
+      - name: Deploy immutable containers
+        uses: kanedasec/platform-workflows/actions/tailscale-ssh-deploy@d2f64a7d70a3112c7a99687e60963be804306a31
+        with:
+          oauth_client_id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth_secret: ${{ secrets.TS_OAUTH_SECRET }}
+          ssh_private_key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          target_host: ${{ vars.DEPLOY_HOST }}
+          target_user: ${{ vars.DEPLOY_USER }}
+          known_hosts: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          deploy_command: ${{ vars.DEPLOY_COMMAND }}
+          image_tag: sha-${{ github.sha }}
+          public_url: ${{ vars.DEPLOY_URL }}
+          readiness_path: /ready
