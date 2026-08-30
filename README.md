@@ -1,5 +1,8 @@
 # Security Gate Policy Manager
 
+Repository-specific architecture, security invariants, and implementation rules
+for coding agents are documented in [`AGENTS.md`](AGENTS.md).
+
 Security Gate Policy Manager is a modular monolith for defining gate enforcement defaults and issuing, auditing, evaluating, and revoking temporary CI/CD security exceptions. The administrative portal runs on React, the versioned API on FastAPI, and persistent state on PostgreSQL.
 
 The central rule is **fail closed**: an absent, unknown, expired, revoked, inactive, malformed, or unauthenticated policy never grants a bypass.
