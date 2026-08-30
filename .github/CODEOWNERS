@@ -1,2 +1,3 @@
 # CI/CD definitions and their policy consumers form one trust boundary.
 /.github/ @kanedasec
+/AGENTS.md @kanedasec
