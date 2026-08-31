@@ -14,13 +14,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  pipeline-config:
+    name: Security pipeline configuration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: security-policy
+    permissions:
+      contents: read
+    outputs:
+      gates: ${{ steps.resolve.outputs.gates }}
+    steps:
+      - name: Resolve central security pipeline
+        id: resolve
+        uses: kanedasec/platform-workflows/actions/sgp-pipeline-config@988ed5afc2652a81b4b0eb07f4496264259712f3
+        env:
+          SGP_MANAGER_API_KEY: ${{ secrets.SGP_MANAGER_API_KEY }}
+
+      - name: Preserve resolved pipeline evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sgp-pipeline-configuration
+          path: ${{ steps.resolve.outputs.configuration_path }}
+          if-no-files-found: error
+          retention-days: 7
+
   differential-security:
     name: Differential security
-    uses: kanedasec/platform-workflows/.github/workflows/security-differential.yaml@5033239ab1a406704cdb8c0184284b5e17aebe6c
+    needs: pipeline-config
+    uses: kanedasec/platform-workflows/.github/workflows/security-differential.yaml@988ed5afc2652a81b4b0eb07f4496264259712f3
+    with:
+      gates: ${{ needs.pipeline-config.outputs.gates }}
 
   policy-gate:
     name: Security policy (SGP Manager)
-    needs: differential-security
+    if: always()
+    needs: [pipeline-config, differential-security]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
@@ -29,7 +58,19 @@ jobs:
       actions: read
       contents: read
     steps:
+      - name: Require successful pipeline discovery and scanners
+        env:
+          PIPELINE_RESULT: ${{ needs.pipeline-config.result }}
+          SCANNER_RESULT: ${{ needs.differential-security.result }}
+        run: |
+          if [[ "$PIPELINE_RESULT" != "success" || "$SCANNER_RESULT" != "success" ]]; then
+            echo "Security prerequisites failed: pipeline=$PIPELINE_RESULT scanners=$SCANNER_RESULT"
+            exit 1
+          fi
+
       - name: Apply centralized security policies
-        uses: kanedasec/platform-workflows/actions/sgp-policy-from-artifacts@5033239ab1a406704cdb8c0184284b5e17aebe6c
+        uses: kanedasec/platform-workflows/actions/sgp-policy-from-artifacts@988ed5afc2652a81b4b0eb07f4496264259712f3
         env:
           SGP_MANAGER_API_KEY: ${{ secrets.SGP_MANAGER_API_KEY }}
+        with:
+          gates: ${{ needs.pipeline-config.outputs.gates }}
