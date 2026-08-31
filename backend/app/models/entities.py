@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Index, JSON, String, Table, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -102,6 +102,12 @@ class Application(Base):
 
 class Gate(Base):
     __tablename__ = "gates"
+    __table_args__ = (
+        CheckConstraint(
+            "pipeline_position IS NULL OR pipeline_position >= 0",
+            name="ck_gates_pipeline_position_nonnegative",
+        ),
+    )
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("owner_labels.id", ondelete="RESTRICT"), index=True)
     name: Mapped[str] = mapped_column(String(120))
@@ -110,6 +116,7 @@ class Gate(Base):
     default_blocking_severities: Mapped[list[str]] = mapped_column(
         JSON, default=lambda: ["low", "medium", "high", "critical"]
     )
+    pipeline_position: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

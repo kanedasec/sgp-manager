@@ -10,8 +10,9 @@ The central rule is **fail closed**: an absent, unknown, expired, revoked, inact
 ## Architecture
 
 ```text
-Administrator -> React portal -> FastAPI admin API -> PostgreSQL
-Pipeline ------ X-API-Key ---> POST /api/v1/policies/evaluate-enforcement
+Administrator -> React portal -> ordered global security pipe -> PostgreSQL
+Pipeline ------ X-API-Key ---> resolve-pipeline -> selected scanners
+Pipeline ------ X-API-Key ---> evaluate-enforcement -> PASS / BLOCK
 ```
 
 - `frontend`: React + TypeScript + Vite, served by unprivileged nginx.
@@ -23,6 +24,7 @@ Pipeline ------ X-API-Key ---> POST /api/v1/policies/evaluate-enforcement
 - Gates and policies have a required reusable owner label (for example `appsec`, `architecture`, or `quality`). All gates grouped into one policy must belong to that policy's owner.
 - Human authorization is owner-scoped group RBAC. `ADMIN` users have implicit global access; `USER` accounts receive additive `view`, `create`, and `edit` roles from active groups.
 - Every gate defines one or more default blocking severities. Effective pipeline enforcement is calculated as `default blocking severities - currently active bypass severities`.
+- Administrators select and order the active global security pipe by dragging gates in the portal. Pipeline preflight retrieves this configuration before any scanner starts.
 - `status` is calculated from UTC timestamps and revocation fields. A future policy is shown as `SCHEDULED`; effective states remain `ACTIVE`, `EXPIRED`, and `REVOKED`.
 
 More detail is in [docs/architecture.md](docs/architecture.md).
@@ -139,6 +141,17 @@ The only published container port is nginx. Do not add a PostgreSQL `ports:` map
 
 Create an API credential in **Access Management → API Credentials** and copy it immediately. The full value is not recoverable.
 
+First resolve the ordered security pipe. The workflow must stop on every error,
+an empty response, or an unknown gate implementation:
+
+```bash
+curl --fail-with-body -X POST \
+  http://localhost:3000/api/v1/policies/resolve-pipeline \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: ${BYPASS_API_KEY}" \
+  -d '{"application":"payment-api"}'
+```
+
 The recommended endpoint returns the final severities that must block each gate after applying any currently effective bypass:
 
 ```bash
@@ -205,10 +218,11 @@ See [docs/api.md](docs/api.md) for the exact consumer contract.
 1. Sign in at `/login`.
 2. Under **Access Management → Owners**, create ownership labels such as AppSec, Architecture, and Quality.
 3. Register an application and one or more security gates, assigning an owner and selecting at least one default blocking severity per gate.
-4. Create one application policy, choose its owner, select applicable gates belonging to that owner, configure severities per gate, and provide a UTC-normalized expiration and justification.
-5. Generate a pipeline API credential and store it in the CI/CD secret store.
-6. Resolve final blocking severities using `POST /api/v1/policies/evaluate-enforcement`, never query parameters.
-7. Revoke the bypass when it is no longer required and inspect the audit log.
+4. As an administrator, drag supported active gates into the global security pipe and save a non-empty order.
+5. Create one application policy, choose its owner, select applicable gates belonging to that owner, configure severities per gate, and provide a UTC-normalized expiration and justification.
+6. Generate a pipeline API credential and store it in the CI/CD secret store.
+7. Resolve the pipe using `POST /api/v1/policies/resolve-pipeline`, then resolve final blocking severities using `POST /api/v1/policies/evaluate-enforcement`.
+8. Revoke the bypass when it is no longer required and inspect the audit log.
 
 Portal users, groups, owners, and API credentials are managed together under **Access Management**. Administrators cannot deactivate or downgrade themselves, passwords are never returned, and every access-management change is audited.
 

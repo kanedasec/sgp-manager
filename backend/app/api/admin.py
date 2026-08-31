@@ -16,7 +16,8 @@ from app.repositories.policies import policy_query
 from app.schemas.admin import (
     ApiCredentialCreate, ApiCredentialCreated, ApiCredentialResponse, ApplicationCreate, ApplicationResponse,
     ApplicationUpdate, AuditResponse, DashboardResponse, GateCreate, GateResponse, GateUpdate, PolicyCreate,
-    OwnerResponse, PolicyResponse, PolicyUpdate, RevokeRequest, UserAdminCreate, UserAdminResponse, UserAdminUpdate,
+    OwnerResponse, PolicyResponse, PolicyUpdate, RevokeRequest, SecurityPipelineResponse, SecurityPipelineUpdate,
+    UserAdminCreate, UserAdminResponse, UserAdminUpdate,
 )
 from app.services.audit import record_audit
 from app.services.access import permitted_owner_ids, require_permission
@@ -134,6 +135,10 @@ def update_gate(item_id: UUID, data: GateUpdate, request: Request, db: Session =
         raise HTTPException(404, "Gate not found")
     require_permission(user, "gates", "edit", item.owner_id)
     changes = data.model_dump(exclude_unset=True)
+    if "slug" in changes and changes["slug"] != item.slug and item.pipeline_position is not None:
+        raise HTTPException(409, "Remove the gate from the security pipeline before changing its identifier")
+    if changes.get("active") is False and item.pipeline_position is not None and user.role != UserRole.ADMIN:
+        raise HTTPException(403, "Only an administrator can deactivate a gate in the global security pipeline")
     if "owner_id" in changes:
         new_owner = db.get(OwnerLabel, changes["owner_id"])
         if not new_owner or not new_owner.active:
@@ -143,10 +148,85 @@ def update_gate(item_id: UUID, data: GateUpdate, request: Request, db: Session =
         if key == "default_blocking_severities":
             value = [severity.value for severity in value]
         setattr(item, key, value.strip() if isinstance(value, str) else value)
+    if changes.get("active") is False and item.pipeline_position is not None:
+        item.pipeline_position = None
+        db.flush()
+        remaining_pipeline = list(db.scalars(
+            select(Gate)
+            .where(Gate.active.is_(True), Gate.pipeline_position.is_not(None))
+            .order_by(Gate.pipeline_position)
+        ))
+        for position, gate in enumerate(remaining_pipeline):
+            gate.pipeline_position = position
+        record_audit(
+            db, "SECURITY_PIPELINE_UPDATED", "USER", user.id, "SECURITY_PIPELINE", None,
+            {
+                "reason": "gate_deactivated",
+                "removed_gate": item.slug,
+                "gates": [gate.slug for gate in remaining_pipeline],
+            },
+            source_ip(request),
+        )
     record_audit(db, "GATE_UPDATED", "USER", user.id, "GATE", item.id, {"fields": list(changes)}, source_ip(request))
     commit_unique(db, "Gate identifier already exists")
     db.refresh(item)
     return item
+
+
+def serialize_security_pipeline(gates: list[Gate]) -> SecurityPipelineResponse:
+    return SecurityPipelineResponse(gates=[
+        {"id": gate.id, "name": gate.name, "slug": gate.slug, "position": gate.pipeline_position}
+        for gate in gates
+        if gate.pipeline_position is not None
+    ])
+
+
+@router.get("/security-pipeline", response_model=SecurityPipelineResponse)
+def get_security_pipeline(db: Session = Depends(get_db), _: User = Depends(admin_user)):
+    gates = list(db.scalars(
+        select(Gate)
+        .where(Gate.active.is_(True), Gate.pipeline_position.is_not(None))
+        .order_by(Gate.pipeline_position)
+    ))
+    return serialize_security_pipeline(gates)
+
+
+@router.patch("/security-pipeline", response_model=SecurityPipelineResponse)
+def update_security_pipeline(
+    data: SecurityPipelineUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_user),
+):
+    selected = list(db.scalars(select(Gate).where(Gate.id.in_(data.gate_ids))))
+    selected_by_id = {gate.id: gate for gate in selected}
+    if len(selected_by_id) != len(data.gate_ids):
+        raise HTTPException(400, "Every pipeline gate must exist")
+    if any(not gate.active for gate in selected):
+        raise HTTPException(400, "Inactive gates cannot be added to the security pipeline")
+
+    ordered = [selected_by_id[gate_id] for gate_id in data.gate_ids]
+    previous = list(db.scalars(
+        select(Gate)
+        .where(Gate.pipeline_position.is_not(None))
+        .order_by(Gate.pipeline_position)
+    ))
+    for gate in previous:
+        gate.pipeline_position = None
+    db.flush()
+    for position, gate in enumerate(ordered):
+        gate.pipeline_position = position
+
+    record_audit(
+        db, "SECURITY_PIPELINE_UPDATED", "USER", user.id, "SECURITY_PIPELINE", None,
+        {
+            "previous_gates": [gate.slug for gate in previous],
+            "gates": [gate.slug for gate in ordered],
+        },
+        source_ip(request),
+    )
+    commit_unique(db, "Security pipeline positions conflict")
+    return serialize_security_pipeline(ordered)
 
 
 @router.get("/bypass-policies", response_model=list[PolicyResponse])
