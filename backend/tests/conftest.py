@@ -53,11 +53,29 @@ def owner(client, admin_headers):
 
 @pytest.fixture
 def domain(client, admin_headers, owner):
-    application = client.post("/api/v1/admin/applications", headers=admin_headers, json={"name": "Payment API", "slug": "payment-api"}).json()
     gate = client.post(
         "/api/v1/admin/gates", headers=admin_headers,
         json={"name": "Secrets", "slug": "secrets", "owner_id": owner["id"]},
     ).json()
+    configured = client.patch(
+        "/api/v1/admin/security-pipeline", headers=admin_headers,
+        json={"gate_ids": [gate["id"]]},
+    )
+    assert configured.status_code == 200
+    gate_policy = next(
+        item for item in client.get(
+            "/api/v1/admin/gate-policies", headers=admin_headers,
+        ).json() if item["slug"] == "default-security-policy"
+    )
+    application_response = client.post(
+        "/api/v1/admin/applications", headers=admin_headers,
+        json={
+            "name": "Payment API", "slug": "payment-api",
+            "gate_policy_id": gate_policy["id"],
+        },
+    )
+    assert application_response.status_code == 201
+    application = application_response.json()
     return application, gate
 
 

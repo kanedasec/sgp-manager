@@ -14,10 +14,19 @@ class Severity(str, Enum):
     critical = "critical"
 
 
+class GatePolicySummary(BaseModel):
+    id: UUID
+    name: str
+    slug: str
+    active: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ApplicationCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     slug: Slug = Field(min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
+    gate_policy_id: UUID
 
 
 class ApplicationUpdate(BaseModel):
@@ -25,6 +34,7 @@ class ApplicationUpdate(BaseModel):
     slug: Slug | None = Field(default=None, min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
     active: bool | None = None
+    gate_policy_id: UUID | None = None
 
 
 class ApplicationResponse(BaseModel):
@@ -32,6 +42,8 @@ class ApplicationResponse(BaseModel):
     name: str
     slug: str
     description: str | None
+    gate_policy_id: UUID
+    gate_policy: GatePolicySummary
     active: bool
     created_at: datetime
     updated_at: datetime
@@ -62,7 +74,10 @@ class OwnerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class GateCreate(ApplicationCreate):
+class GateCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    slug: Slug = Field(min_length=2, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
     owner_id: UUID
     default_blocking_severities: list[Severity] = Field(
         default_factory=lambda: list(Severity), min_length=1, max_length=4
@@ -74,7 +89,11 @@ class GateCreate(ApplicationCreate):
         return normalize_severities(value)
 
 
-class GateUpdate(ApplicationUpdate):
+class GateUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    slug: Slug | None = Field(default=None, min_length=2, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
+    active: bool | None = None
     owner_id: UUID | None = None
     default_blocking_severities: list[Severity] | None = Field(default=None, min_length=1, max_length=4)
 
@@ -84,11 +103,18 @@ class GateUpdate(ApplicationUpdate):
         return normalize_severities(value) if value is not None else None
 
 
-class GateResponse(ApplicationResponse):
+class GateResponse(BaseModel):
+    id: UUID
+    name: str
+    slug: str
+    description: str | None
+    active: bool
+    created_at: datetime
+    updated_at: datetime
     owner_id: UUID
     owner: OwnerResponse
     default_blocking_severities: list[str]
-    pipeline_position: int | None
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SecurityPipelineUpdate(BaseModel):
@@ -118,6 +144,65 @@ def normalize_severities(value: list[Severity]) -> list[Severity]:
         raise ValueError("duplicate severities are not allowed")
     order = list(Severity)
     return sorted(value, key=order.index)
+
+
+class GatePolicyGateInput(BaseModel):
+    gate_id: UUID
+    blocking_severities: list[Severity] = Field(min_length=1, max_length=4)
+
+    @field_validator("blocking_severities")
+    @classmethod
+    def unique_blocking_severities(cls, value: list[Severity]) -> list[Severity]:
+        return normalize_severities(value)
+
+
+class GatePolicyGateResponse(BaseModel):
+    gate_id: UUID
+    gate_name: str
+    gate_slug: str
+    position: int
+    blocking_severities: list[str]
+
+
+class GatePolicyCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    slug: Slug = Field(min_length=2, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
+    gates: list[GatePolicyGateInput] = Field(min_length=1, max_length=32)
+
+    @field_validator("gates")
+    @classmethod
+    def unique_gates(cls, value: list[GatePolicyGateInput]) -> list[GatePolicyGateInput]:
+        if len({item.gate_id for item in value}) != len(value):
+            raise ValueError("duplicate gates are not allowed")
+        return value
+
+
+class GatePolicyUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    slug: Slug | None = Field(default=None, min_length=2, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
+    active: bool | None = None
+    gates: list[GatePolicyGateInput] | None = Field(default=None, min_length=1, max_length=32)
+
+    @field_validator("gates")
+    @classmethod
+    def unique_gates(cls, value: list[GatePolicyGateInput] | None) -> list[GatePolicyGateInput] | None:
+        if value is not None and len({item.gate_id for item in value}) != len(value):
+            raise ValueError("duplicate gates are not allowed")
+        return value
+
+
+class GatePolicyResponse(BaseModel):
+    id: UUID
+    name: str
+    slug: str
+    description: str | None
+    active: bool
+    gates: list[GatePolicyGateResponse]
+    application_count: int
+    created_at: datetime
+    updated_at: datetime
 
 
 class PolicyGateInput(BaseModel):

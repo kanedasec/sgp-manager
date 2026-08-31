@@ -21,6 +21,8 @@ Response:
 ```json
 {
   "application": "payment-api",
+  "gate_policy": "crown-jewels",
+  "gate_policy_name": "Crown Jewels",
   "generated_at": "2026-08-31T12:00:00Z",
   "gates": [
     {"gate": "sast", "position": 0},
@@ -30,9 +32,11 @@ Response:
 }
 ```
 
-The response contains only active gates included in the administrator-managed
-global pipe, ordered by contiguous zero-based position. An unknown or inactive
-application returns `404`; an empty pipeline returns `503`. Missing credentials,
+The response contains only active gates in the reusable policy assigned to the
+application, ordered by contiguous zero-based position. The policy is selected
+server-side from the application slug; a repository cannot request a weaker
+policy. An unknown or inactive application returns `404`; an invalid, inactive,
+or empty assigned policy returns `503`. Missing credentials,
 unknown gate implementations, malformed or duplicate entries, non-contiguous
 positions, and all non-2xx responses must stop the workflow before scanners run.
 
@@ -56,7 +60,10 @@ Request:
 }
 ```
 
-`gate` is optional. When omitted, all active gates are returned.
+`gate` is optional. For a known application, omitting it returns all gates in the
+assigned policy. A requested active gate excluded from that policy returns an
+empty blocking-severity array for compatibility with older consumers; current
+preflight consumers do not run excluded scanners.
 
 ```json
 {
@@ -74,7 +81,7 @@ Request:
 The server computes each entry using:
 
 ```text
-blocking severities = gate default blocking severities - effective bypass severities
+blocking severities = assigned policy gate severities - effective bypass severities
 ```
 
 Only active, non-revoked bypasses within `valid_from <= generated_at < expires_at` can remove a severity. Bypasses attached to inactive gates have no effect. An unknown or inactive application receives the complete defaults with nothing removed. This makes inventory mistakes fail closed.
@@ -154,7 +161,7 @@ Do not cache beyond `expires_at`; short-lived caching also delays revocation and
 - `403`: credential lacks `policy:read`.
 - `422`: malformed request.
 - `429`: rate limit exceeded.
-- `503`: the global security pipeline has no configured gates.
+- `503`: the application's assigned gate policy is missing, inactive, empty, or invalid.
 - `500`: unexpected server error; response includes a correlation ID.
 
 All non-2xx responses are **NO BYPASS**. Pipelines may stop entirely when the manager is unavailable, which is stricter and recommended for high-assurance environments.

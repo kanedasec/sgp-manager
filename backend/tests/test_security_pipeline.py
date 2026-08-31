@@ -79,7 +79,7 @@ def test_pipeline_update_rejects_empty_duplicate_unknown_and_inactive_gates(
     assert configure_pipeline(client, admin_headers, gate).status_code == 400
 
 
-def test_deactivating_gate_removes_it_and_pipeline_slug_change_is_blocked(
+def test_referenced_gate_must_be_removed_from_policy_before_mutation(
     client, admin_headers, owner
 ):
     sast = create_gate(client, admin_headers, owner, "SAST", "sast")
@@ -96,13 +96,30 @@ def test_deactivating_gate_removes_it_and_pipeline_slug_change_is_blocked(
     disabled = client.patch(
         f"/api/v1/admin/gates/{sast['id']}", headers=admin_headers, json={"active": False}
     )
+    assert disabled.status_code == 409
+    default_policy = next(
+        item for item in client.get(
+            "/api/v1/admin/gate-policies", headers=admin_headers,
+        ).json() if item["slug"] == "default-security-policy"
+    )
+    changed = client.patch(
+        f"/api/v1/admin/gate-policies/{default_policy['id']}", headers=admin_headers,
+        json={"gates": [{
+            "gate_id": secrets["id"],
+            "blocking_severities": ["low", "medium", "high", "critical"],
+        }]},
+    )
+    assert changed.status_code == 200
+    disabled = client.patch(
+        f"/api/v1/admin/gates/{sast['id']}", headers=admin_headers, json={"active": False}
+    )
     assert disabled.status_code == 200
     pipeline = client.get("/api/v1/admin/security-pipeline", headers=admin_headers)
     assert [gate["slug"] for gate in pipeline.json()["gates"]] == ["secrets"]
     assert pipeline.json()["gates"][0]["position"] == 0
 
 
-def test_owner_scoped_gate_manager_cannot_remove_gate_from_global_pipeline(
+def test_owner_scoped_gate_manager_cannot_mutate_referenced_gate_or_policy(
     client, admin_headers, owner
 ):
     gate = create_gate(client, admin_headers, owner, "SAST", "sast")
@@ -138,7 +155,7 @@ def test_owner_scoped_gate_manager_cannot_remove_gate_from_global_pipeline(
     denied = client.patch(
         f"/api/v1/admin/gates/{gate['id']}", headers=headers, json={"active": False}
     )
-    assert denied.status_code == 403
+    assert denied.status_code == 409
     assert client.get(
         "/api/v1/admin/security-pipeline", headers=headers
     ).status_code == 403
@@ -146,7 +163,7 @@ def test_owner_scoped_gate_manager_cannot_remove_gate_from_global_pipeline(
 
 def test_pipeline_resolution_fails_closed(client, admin_headers, domain, api_key):
     key, _ = api_key
-    assert resolve_pipeline(client, key).status_code == 503
+    assert resolve_pipeline(client, key).status_code == 200
     assert resolve_pipeline(client, key, "unknown-application").status_code == 404
     assert resolve_pipeline(client, "sec_invalid").status_code == 401
     assert client.get("/api/v1/admin/security-pipeline").status_code == 401

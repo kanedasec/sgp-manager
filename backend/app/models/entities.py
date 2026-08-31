@@ -91,6 +91,9 @@ class GroupPermission(Base):
 class Application(Base):
     __tablename__ = "applications"
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    gate_policy_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("gate_policies.id", ondelete="RESTRICT"), index=True
+    )
     name: Mapped[str] = mapped_column(String(120))
     slug: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text)
@@ -98,16 +101,11 @@ class Application(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     policies: Mapped[list["BypassPolicy"]] = relationship(back_populates="application")
+    gate_policy: Mapped["GatePolicy"] = relationship(back_populates="applications", lazy="joined")
 
 
 class Gate(Base):
     __tablename__ = "gates"
-    __table_args__ = (
-        CheckConstraint(
-            "pipeline_position IS NULL OR pipeline_position >= 0",
-            name="ck_gates_pipeline_position_nonnegative",
-        ),
-    )
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("owner_labels.id", ondelete="RESTRICT"), index=True)
     name: Mapped[str] = mapped_column(String(120))
@@ -116,12 +114,52 @@ class Gate(Base):
     default_blocking_severities: Mapped[list[str]] = mapped_column(
         JSON, default=lambda: ["low", "medium", "high", "critical"]
     )
-    pipeline_position: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     policy_scopes: Mapped[list["BypassPolicyGate"]] = relationship(back_populates="gate")
+    gate_policy_scopes: Mapped[list["GatePolicyGate"]] = relationship(back_populates="gate")
     owner: Mapped[OwnerLabel] = relationship()
+
+
+class GatePolicy(Base):
+    """Reusable ordered security standard assigned to one or more applications."""
+
+    __tablename__ = "gate_policies"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(120))
+    slug: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    gates: Mapped[list["GatePolicyGate"]] = relationship(
+        back_populates="policy",
+        cascade="all, delete-orphan",
+        order_by="GatePolicyGate.position",
+        lazy="selectin",
+    )
+    applications: Mapped[list[Application]] = relationship(back_populates="gate_policy")
+
+
+class GatePolicyGate(Base):
+    __tablename__ = "gate_policy_gates"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "gate_id", name="uq_gate_policy_gate"),
+        UniqueConstraint("policy_id", "position", name="uq_gate_policy_position"),
+        CheckConstraint("position >= 0", name="ck_gate_policy_position_nonnegative"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    policy_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("gate_policies.id", ondelete="CASCADE"), index=True
+    )
+    gate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("gates.id", ondelete="RESTRICT"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    blocking_severities: Mapped[list[str]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    policy: Mapped[GatePolicy] = relationship(back_populates="gates")
+    gate: Mapped[Gate] = relationship(back_populates="gate_policy_scopes", lazy="joined")
 
 
 class BypassPolicy(Base):

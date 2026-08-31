@@ -1,4 +1,4 @@
-import { Activity, AppWindow, FileClock, Gauge, LogOut, Menu, ShieldCheck, UsersRound, Workflow, X } from 'lucide-react'
+import { Activity, AppWindow, FileClock, Gauge, Layers3, LogOut, Menu, ShieldCheck, UsersRound, Workflow, X } from 'lucide-react'
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth'
@@ -7,6 +7,7 @@ const nav = [
   { to: '/', label: 'Dashboard', icon: Gauge, admin: true },
   { to: '/applications', label: 'Applications', icon: AppWindow },
   { to: '/gates', label: 'Security Gates', icon: Workflow, resource: 'gates' },
+  { to: '/gate-policies', label: 'Gate Policies', icon: Layers3, admin: true },
   { to: '/policies', label: 'Bypass Policies', icon: ShieldCheck, resource: 'policies' },
   { to: '/access', label: 'Access Management', icon: UsersRound, admin: true },
   { to: '/audit', label: 'Audit Logs', icon: FileClock, admin: true },

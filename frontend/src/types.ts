@@ -1,7 +1,8 @@
 export type Owner = { id: string; name: string; slug: string; description?: string | null; active: boolean; created_at: string; updated_at: string }
-export type Entity = { id: string; name: string; slug: string; description?: string | null; active: boolean; created_at: string; updated_at: string; owner_id?: string; owner?: Owner; default_blocking_severities?: string[]; pipeline_position?: number | null }
-export type SecurityPipelineGate = { id: string; name: string; slug: string; position: number }
-export type SecurityPipeline = { gates: SecurityPipelineGate[] }
+export type GatePolicySummary = { id: string; name: string; slug: string; active: boolean }
+export type Entity = { id: string; name: string; slug: string; description?: string | null; active: boolean; created_at: string; updated_at: string; owner_id?: string; owner?: Owner; default_blocking_severities?: string[]; gate_policy_id?: string; gate_policy?: GatePolicySummary }
+export type GatePolicyGate = { gate_id: string; gate_name: string; gate_slug: string; position: number; blocking_severities: string[] }
+export type GatePolicy = { id: string; name: string; slug: string; description?: string | null; active: boolean; gates: GatePolicyGate[]; application_count: number; created_at: string; updated_at: string }
 export type PolicyGate = { gate_id: string; gate_name: string; gate_slug: string; severities: string[] }
 export type Policy = {
   id: string; application_id: string; application_name: string; application_slug: string; owner_id: string; owner_name: string; owner_slug: string; gates: PolicyGate[];

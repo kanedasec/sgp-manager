@@ -92,9 +92,22 @@ def test_revoked_bypass_is_not_returned(client, admin_headers, domain, api_key):
 
 def test_inactive_gate_is_not_returned(client, admin_headers, domain, api_key):
     key, _ = api_key
-    _, gate = domain
+    application, gate = domain
     client.post("/api/v1/admin/bypass-policies", headers=admin_headers, json=payload(domain))
-    client.patch(f"/api/v1/admin/gates/{gate['id']}", headers=admin_headers, json={"active": False})
+    replacement = client.post(
+        "/api/v1/admin/gates", headers=admin_headers,
+        json={"name": "SAST", "slug": "sast", "owner_id": gate["owner_id"]},
+    ).json()
+    assert client.patch(
+        f"/api/v1/admin/gate-policies/{application['gate_policy_id']}", headers=admin_headers,
+        json={"gates": [{
+            "gate_id": replacement["id"],
+            "blocking_severities": ["low", "medium", "high", "critical"],
+        }]},
+    ).status_code == 200
+    assert client.patch(
+        f"/api/v1/admin/gates/{gate['id']}", headers=admin_headers, json={"active": False},
+    ).status_code == 200
     assert evaluate(client, key).json()["policies"] == []
 
 
