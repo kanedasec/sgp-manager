@@ -88,6 +88,29 @@ class GateResponse(ApplicationResponse):
     owner_id: UUID
     owner: OwnerResponse
     default_blocking_severities: list[str]
+    pipeline_position: int | None
+
+
+class SecurityPipelineUpdate(BaseModel):
+    gate_ids: list[UUID] = Field(min_length=1, max_length=32)
+
+    @field_validator("gate_ids")
+    @classmethod
+    def unique_gate_ids(cls, value: list[UUID]) -> list[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("duplicate gates are not allowed")
+        return value
+
+
+class SecurityPipelineGateResponse(BaseModel):
+    id: UUID
+    name: str
+    slug: str
+    position: int
+
+
+class SecurityPipelineResponse(BaseModel):
+    gates: list[SecurityPipelineGateResponse]
 
 
 def normalize_severities(value: list[Severity]) -> list[Severity]:

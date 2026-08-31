@@ -13,6 +13,7 @@ from app.models import ApiCredential, Application, Gate
 from app.repositories.policies import effective_policy_scopes
 from app.schemas.evaluation import (
     EnforcementEvaluationResponse, EvaluatedGateEnforcement, EvaluatedPolicy, EvaluationRequest, EvaluationResponse,
+    PipelineResolutionRequest, PipelineResolutionResponse, ResolvedPipelineGate,
 )
 
 
@@ -59,6 +60,48 @@ def evaluate(
         for scope in scopes
     ]
     return EvaluationResponse(application=application.slug, generated_at=now, policies=result)
+
+
+@router.post(
+    "/resolve-pipeline",
+    response_model=PipelineResolutionResponse,
+    summary="Resolve the ordered security pipeline for an application",
+    description=(
+        "Fail-closed pipeline discovery endpoint. Returns the active gates selected by an administrator in their "
+        "configured order. Unknown or inactive applications and an empty pipeline are rejected."
+    ),
+)
+def resolve_pipeline(
+    data: PipelineResolutionRequest,
+    request: Request,
+    _: ApiCredential = Depends(api_credential),
+    db: Session = Depends(get_db),
+):
+    enforce_rate_limit(request)
+    now = datetime.now(UTC)
+    application = db.scalar(
+        select(Application).where(Application.slug == data.application, Application.active.is_(True))
+    )
+    if not application:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Active application not found")
+
+    gates = list(db.scalars(
+        select(Gate)
+        .where(Gate.active.is_(True), Gate.pipeline_position.is_not(None))
+        .order_by(Gate.pipeline_position)
+    ))
+    if not gates:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Security pipeline is not configured")
+
+    return PipelineResolutionResponse(
+        application=application.slug,
+        generated_at=now,
+        gates=[
+            ResolvedPipelineGate(gate=gate.slug, position=gate.pipeline_position)
+            for gate in gates
+            if gate.pipeline_position is not None
+        ],
+    )
 
 
 @router.post(

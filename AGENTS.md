@@ -78,6 +78,12 @@ server is deployed. Do not bypass the policy check to resolve that cycle.
 
 ## Fail-closed enforcement invariants
 
+`POST /api/v1/policies/resolve-pipeline` is the pre-scan contract. It returns
+only active gates selected in the administrator-managed global pipe, in unique
+contiguous order. Unknown/inactive applications return `404`; an empty pipe
+returns `503`. The pipeline API credential must remain isolated to preflight and
+policy jobs and must never be exposed to scanner jobs.
+
 `POST /api/v1/policies/evaluate-enforcement` is the authoritative pipeline
 contract. Preserve all of these behaviors:
 
@@ -114,6 +120,8 @@ confused with final enforcement calculation.
 - Application mutation, access management, API credentials, dashboards, and
   audit logs remain administrator-only unless an explicit authorization design
   is reviewed.
+- Global security-pipeline membership and ordering remain administrator-only.
+  Owner-scoped gate permissions do not authorize changing the shared pipe.
 - Administrative writes and their audit events belong in the same transaction
   where applicable. Audit metadata must remain allow-limited and scrubbed.
 

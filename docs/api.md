@@ -1,5 +1,44 @@
 # Pipeline API
 
+## Resolve the security pipeline
+
+Before starting any scanner, a pipeline retrieves the centrally selected gates:
+
+```http
+POST /api/v1/policies/resolve-pipeline
+Content-Type: application/json
+X-API-Key: sec_...
+```
+
+Request:
+
+```json
+{"application": "payment-api"}
+```
+
+Response:
+
+```json
+{
+  "application": "payment-api",
+  "generated_at": "2026-08-31T12:00:00Z",
+  "gates": [
+    {"gate": "sast", "position": 0},
+    {"gate": "secrets", "position": 1},
+    {"gate": "sca", "position": 2}
+  ]
+}
+```
+
+The response contains only active gates included in the administrator-managed
+global pipe, ordered by contiguous zero-based position. An unknown or inactive
+application returns `404`; an empty pipeline returns `503`. Missing credentials,
+unknown gate implementations, malformed or duplicate entries, non-contiguous
+positions, and all non-2xx responses must stop the workflow before scanners run.
+
+The ordering is an auditable policy/display order. Independent scanner jobs may
+run in parallel after the preflight response has been validated.
+
 ## Resolve final gate enforcement
 
 ```http
@@ -115,6 +154,7 @@ Do not cache beyond `expires_at`; short-lived caching also delays revocation and
 - `403`: credential lacks `policy:read`.
 - `422`: malformed request.
 - `429`: rate limit exceeded.
+- `503`: the global security pipeline has no configured gates.
 - `500`: unexpected server error; response includes a correlation ID.
 
 All non-2xx responses are **NO BYPASS**. Pipelines may stop entirely when the manager is unavailable, which is stricter and recommended for high-assurance environments.
