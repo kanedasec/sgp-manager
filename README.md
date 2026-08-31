@@ -10,7 +10,7 @@ The central rule is **fail closed**: an absent, unknown, expired, revoked, inact
 ## Architecture
 
 ```text
-Administrator -> React portal -> ordered global security pipe -> PostgreSQL
+Administrator -> React portal -> reusable gate policies -> application assignment -> PostgreSQL
 Pipeline ------ X-API-Key ---> resolve-pipeline -> selected scanners
 Pipeline ------ X-API-Key ---> evaluate-enforcement -> PASS / BLOCK
 ```
@@ -23,8 +23,8 @@ Pipeline ------ X-API-Key ---> evaluate-enforcement -> PASS / BLOCK
 - One application-level bypass policy can contain multiple gate scopes. Every scope stores its own validated JSON severity array (`low`, `medium`, `high`, `critical`) while sharing validity, justification, creator, and revocation history.
 - Gates and policies have a required reusable owner label (for example `appsec`, `architecture`, or `quality`). All gates grouped into one policy must belong to that policy's owner.
 - Human authorization is owner-scoped group RBAC. `ADMIN` users have implicit global access; `USER` accounts receive additive `view`, `create`, and `edit` roles from active groups.
-- Every gate defines one or more default blocking severities. Effective pipeline enforcement is calculated as `default blocking severities - currently active bypass severities`.
-- Administrators select and order the active global security pipe by dragging gates in the portal. Pipeline preflight retrieves this configuration before any scanner starts.
+- Every gate defines authoring defaults. Each reusable gate policy owns its ordered active scans and independent blocking severities. Effective enforcement is `assigned policy severities - currently active bypass severities`.
+- Administrators create standards such as `crown-jewels`, assign one to each application, and compose each standard by dragging gates in the portal. Pipeline preflight resolves the application assignment before any scanner starts.
 - `status` is calculated from UTC timestamps and revocation fields. A future policy is shown as `SCHEDULED`; effective states remain `ACTIVE`, `EXPIRED`, and `REVOKED`.
 
 More detail is in [docs/architecture.md](docs/architecture.md).
@@ -217,9 +217,9 @@ See [docs/api.md](docs/api.md) for the exact consumer contract.
 
 1. Sign in at `/login`.
 2. Under **Access Management → Owners**, create ownership labels such as AppSec, Architecture, and Quality.
-3. Register an application and one or more security gates, assigning an owner and selecting at least one default blocking severity per gate.
-4. As an administrator, drag supported active gates into the global security pipe and save a non-empty order.
-5. Create one application policy, choose its owner, select applicable gates belonging to that owner, configure severities per gate, and provide a UTC-normalized expiration and justification.
+3. Register one or more security gates, assigning an owner and selecting at least one policy-authoring default severity per gate.
+4. As an administrator, create a reusable gate policy, drag active gates into its non-empty ordered pipe, and configure blocking severities for every selected gate.
+5. Register an application using its exact CI repository slug and assign one active gate policy. Create temporary bypass policies separately when a reviewed exception is needed.
 6. Generate a pipeline API credential and store it in the CI/CD secret store.
 7. Resolve the pipe using `POST /api/v1/policies/resolve-pipeline`, then resolve final blocking severities using `POST /api/v1/policies/evaluate-enforcement`.
 8. Revoke the bypass when it is no longer required and inspect the audit log.

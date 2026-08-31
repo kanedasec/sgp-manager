@@ -18,6 +18,22 @@ def create_gate(client, headers, owner, name, slug):
     return response.json()
 
 
+def create_gate_policy(client, headers, gate, slug):
+    response = client.post(
+        "/api/v1/admin/gate-policies", headers=headers,
+        json={
+            "name": f"{slug.replace('-', ' ').title()} Standard",
+            "slug": slug,
+            "gates": [{
+                "gate_id": gate["id"],
+                "blocking_severities": ["low", "medium", "high", "critical"],
+            }],
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
 def login_headers(client, username, password):
     response = client.post("/api/v1/auth/login", json={"username": username, "password": password})
     assert response.status_code == 200
@@ -63,9 +79,10 @@ def test_owner_scoped_policy_permissions_are_enforced(client, admin_headers):
     quality = create_owner(client, admin_headers, "Quality", "quality")
     appsec_gate = create_gate(client, admin_headers, appsec, "Secrets", "secrets")
     quality_gate = create_gate(client, admin_headers, quality, "Quality Check", "quality-check")
+    gate_policy = create_gate_policy(client, admin_headers, appsec_gate, "application-standard")
     application = client.post(
         "/api/v1/admin/applications", headers=admin_headers,
-        json={"name": "Payment API", "slug": "payment-api"},
+        json={"name": "Payment API", "slug": "payment-api", "gate_policy_id": gate_policy["id"]},
     ).json()
     appsec_policy = client.post(
         "/api/v1/admin/bypass-policies", headers=admin_headers,
@@ -98,9 +115,10 @@ def test_policy_cannot_include_gate_from_different_owner(client, admin_headers):
     appsec = create_owner(client, admin_headers, "AppSec", "appsec")
     quality = create_owner(client, admin_headers, "Quality", "quality")
     quality_gate = create_gate(client, admin_headers, quality, "Quality", "quality")
+    gate_policy = create_gate_policy(client, admin_headers, quality_gate, "application-standard")
     application = client.post(
         "/api/v1/admin/applications", headers=admin_headers,
-        json={"name": "Payment API", "slug": "payment-api"},
+        json={"name": "Payment API", "slug": "payment-api", "gate_policy_id": gate_policy["id"]},
     ).json()
     response = client.post(
         "/api/v1/admin/bypass-policies", headers=admin_headers,

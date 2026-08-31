@@ -28,8 +28,10 @@ The backend is separated into HTTP routes (`api`), input/output contracts (`sche
 - `OwnerLabel`: reusable authorization boundary such as AppSec, Architecture, or Quality. Labels are disabled rather than deleted.
 - `AccessGroup`: administrator-managed collection assigned to users. Active groups grant additive permissions.
 - `GroupPermission`: normalized `(action, resource, owner)` grant. A null owner represents the global `:all` scope.
-- `Application`: stable unique slug used by pipelines; deactivation preserves history and prevents evaluation.
-- `Gate`: stable unique slug for a security control, required owner, default blocking severity set, active flag, and nullable unique global pipeline position. Deactivation prevents it from being returned for enforcement or pipeline discovery.
+- `Application`: stable unique slug used by pipelines and one required reusable gate-policy assignment; deactivation preserves history and prevents pipeline discovery.
+- `Gate`: stable unique slug for a security control, required owner, policy-authoring severity defaults, and active flag.
+- `GatePolicy`: reusable named security standard assigned to one or more applications.
+- `GatePolicyGate`: ordered gate membership and the policy-specific blocking severity set. A gate appears at most once per policy and positions are contiguous at the API boundary.
 - `BypassPolicy`: application-level, owner-scoped, auditable policy header containing justification, half-open validity window, creator and revocation trail.
 - `BypassPolicyGate`: one gate scope inside a policy, with an independent JSON severity set. A policy may contain many gate scopes but a gate appears at most once in that policy.
 - `ApiCredential`: human label, non-secret prefix, HMAC digest, `policy:read` scopes array, usage/expiry timestamps, and active flag.
@@ -75,6 +77,13 @@ active `sast`, `secrets`, and `sca` gates are backfilled at positions 0, 1, and
 2. Other gates remain outside the pipe until explicitly selected by an
 administrator.
 
+Migration `20260831_0007` creates reusable gate policies, copies the existing
+global pipe and each gate's blocking defaults into a deterministic **Default
+Security Policy**, assigns every existing application to it, and removes the
+obsolete gate-level pipeline position. The migration therefore preserves the
+effective scanner selection and severity behavior while changing ownership of
+that configuration from a global list to an application-assigned standard.
+
 ## Portal authorization
 
 `ADMIN` is a protected break-glass/management role with implicit access to all portal functions. A `USER` has no gate or policy access by default. Its effective permissions are the union of permissions from all assigned active groups; inactive groups grant nothing.
@@ -92,11 +101,12 @@ The allowed action set is `view`, `create`, and `edit`; the current resource set
 
 List queries are filtered to owners for which the actor has `view`; direct-object requests independently verify the same permission. Creation checks the requested owner. Owner changes check edit permission for both the source and destination boundary. Access management, dashboard, application mutation, API credentials, and audit logs are administrator-only. The application catalog is readable by authenticated users because it is shared context for authorized gate and policy work.
 
-The global security pipe is also administrator-only because changing membership
-affects every consuming repository and can cross gate-owner boundaries. An
-owner-scoped gate manager cannot deactivate a gate while it is in the pipe. An
-administrator may do so; the transaction removes it, compacts the remaining
-positions, and records both the gate and pipeline changes.
+Gate-policy management and application assignment are administrator-only because
+a reusable standard may affect several applications and cross gate-owner
+boundaries. A policy assigned to an active application cannot be deactivated.
+A gate referenced by any gate policy cannot be renamed or deactivated until an
+administrator removes it from those policies. These constraints prevent a gate
+catalog edit from silently changing or invalidating application pipelines.
 
 A multi-gate bypass policy can contain only gates whose owner equals the policy owner. This is a deliberate isolation rule: without it, a user with `create-policies:appsec` could place a Quality-owned gate into an AppSec policy and cross the authorization boundary.
 
@@ -115,10 +125,10 @@ Local users, groups, owners, and machine credentials share the portal's **Access
 ## Pipeline flow
 
 1. Authenticate the API key from a header and rate-limit the caller by source address.
-2. Resolve an active application and the ordered global pipe through `/resolve-pipeline`.
+2. Resolve an active application, its active assigned gate policy, and that policy's ordered gates through `/resolve-pipeline`.
 3. Validate that every returned gate has a known workflow implementation; fail before scanning otherwise.
 4. Run the selected independent scanners without exposing the API credential to their jobs.
-5. Load each gate's configured default blocking severities.
+5. Load each selected gate's policy-specific blocking severities.
 6. Query policy gate scopes with `valid_from <= now < expires_at` and no policy/scope revocation.
 7. For each selected gate calculate `blocking = defaults - effective bypass severities`.
 8. Return only the gate slug and final blocking severities.

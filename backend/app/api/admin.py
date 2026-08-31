@@ -10,17 +10,25 @@ from app.api.dependencies import admin_user, current_user, source_ip
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import generate_api_key, hash_api_key, hash_password
-from app.models import AccessGroup, ApiCredential, Application, AuditLog, BypassPolicy, BypassPolicyGate, Gate, OwnerLabel, User
+from app.models import (
+    AccessGroup, ApiCredential, Application, AuditLog, BypassPolicy, BypassPolicyGate, Gate, GatePolicy,
+    GatePolicyGate, OwnerLabel, User,
+)
 from app.models.entities import UserRole
 from app.repositories.policies import policy_query
 from app.schemas.admin import (
     ApiCredentialCreate, ApiCredentialCreated, ApiCredentialResponse, ApplicationCreate, ApplicationResponse,
-    ApplicationUpdate, AuditResponse, DashboardResponse, GateCreate, GateResponse, GateUpdate, PolicyCreate,
-    OwnerResponse, PolicyResponse, PolicyUpdate, RevokeRequest, SecurityPipelineResponse, SecurityPipelineUpdate,
+    ApplicationUpdate, AuditResponse, DashboardResponse, GateCreate, GatePolicyCreate, GatePolicyResponse,
+    GatePolicyUpdate, GateResponse, GateUpdate, PolicyCreate, OwnerResponse, PolicyResponse, PolicyUpdate,
+    RevokeRequest, SecurityPipelineResponse, SecurityPipelineUpdate,
     UserAdminCreate, UserAdminResponse, UserAdminUpdate,
 )
 from app.services.audit import record_audit
 from app.services.access import permitted_owner_ids, require_permission
+from app.services.gate_policies import (
+    ensure_default_gate_policy, gate_policy_query, get_gate_policy, replace_policy_gates,
+    serialize_gate_policy,
+)
 from app.services.policies import aware, create_policy, replace_policy_scopes, serialize_policy, validate_gates
 
 
@@ -33,6 +41,17 @@ def commit_unique(db: Session, message: str) -> None:
     except IntegrityError:
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, message) from None
+
+
+def require_active_gate_policy(db: Session, policy_id: UUID) -> GatePolicy:
+    policy = get_gate_policy(db, policy_id)
+    if not policy or not policy.active:
+        raise HTTPException(400, "Gate policy does not exist or is inactive")
+    if not policy.gates:
+        raise HTTPException(400, "Gate policy must contain at least one gate")
+    if any(not scope.gate.active for scope in policy.gates):
+        raise HTTPException(400, "Gate policy contains an inactive gate")
+    return policy
 
 
 @router.get("/owner-labels", response_model=list[OwnerResponse])
@@ -56,9 +75,15 @@ def list_applications(
 
 @router.post("/applications", response_model=ApplicationResponse, status_code=201)
 def create_application(data: ApplicationCreate, request: Request, db: Session = Depends(get_db), user: User = Depends(admin_user)):
-    item = Application(id=uuid4(), name=data.name.strip(), slug=data.slug, description=data.description)
+    policy = require_active_gate_policy(db, data.gate_policy_id)
+    item = Application(
+        id=uuid4(), name=data.name.strip(), slug=data.slug, description=data.description,
+        gate_policy_id=policy.id,
+    )
     db.add(item)
-    record_audit(db, "APPLICATION_CREATED", "USER", user.id, "APPLICATION", item.id, {"slug": item.slug}, source_ip(request))
+    record_audit(db, "APPLICATION_CREATED", "USER", user.id, "APPLICATION", item.id, {
+        "slug": item.slug, "gate_policy": policy.slug,
+    }, source_ip(request))
     commit_unique(db, "Application identifier already exists")
     db.refresh(item)
     return item
@@ -78,9 +103,17 @@ def update_application(item_id: UUID, data: ApplicationUpdate, request: Request,
     if not item:
         raise HTTPException(404, "Application not found")
     changes = data.model_dump(exclude_unset=True)
+    policy = None
+    if "gate_policy_id" in changes:
+        policy = require_active_gate_policy(db, changes["gate_policy_id"])
+    if changes.get("active") is True and "gate_policy_id" not in changes:
+        require_active_gate_policy(db, item.gate_policy_id)
     for key, value in changes.items():
         setattr(item, key, value.strip() if isinstance(value, str) else value)
-    record_audit(db, "APPLICATION_UPDATED", "USER", user.id, "APPLICATION", item.id, {"fields": list(changes)}, source_ip(request))
+    metadata = {"fields": list(changes)}
+    if policy:
+        metadata["gate_policy"] = policy.slug
+    record_audit(db, "APPLICATION_UPDATED", "USER", user.id, "APPLICATION", item.id, metadata, source_ip(request))
     commit_unique(db, "Application identifier already exists")
     db.refresh(item)
     return item
@@ -135,10 +168,15 @@ def update_gate(item_id: UUID, data: GateUpdate, request: Request, db: Session =
         raise HTTPException(404, "Gate not found")
     require_permission(user, "gates", "edit", item.owner_id)
     changes = data.model_dump(exclude_unset=True)
-    if "slug" in changes and changes["slug"] != item.slug and item.pipeline_position is not None:
-        raise HTTPException(409, "Remove the gate from the security pipeline before changing its identifier")
-    if changes.get("active") is False and item.pipeline_position is not None and user.role != UserRole.ADMIN:
-        raise HTTPException(403, "Only an administrator can deactivate a gate in the global security pipeline")
+    referenced = db.scalar(
+        select(func.count(GatePolicyGate.id))
+        .join(GatePolicy, GatePolicy.id == GatePolicyGate.policy_id)
+        .where(GatePolicyGate.gate_id == item.id, GatePolicy.active.is_(True))
+    ) or 0
+    if "slug" in changes and changes["slug"] != item.slug and referenced:
+        raise HTTPException(409, "Remove the gate from every gate policy before changing its identifier")
+    if changes.get("active") is False and referenced:
+        raise HTTPException(409, "Remove the gate from every gate policy before deactivating it")
     if "owner_id" in changes:
         new_owner = db.get(OwnerLabel, changes["owner_id"])
         if not new_owner or not new_owner.active:
@@ -148,47 +186,23 @@ def update_gate(item_id: UUID, data: GateUpdate, request: Request, db: Session =
         if key == "default_blocking_severities":
             value = [severity.value for severity in value]
         setattr(item, key, value.strip() if isinstance(value, str) else value)
-    if changes.get("active") is False and item.pipeline_position is not None:
-        item.pipeline_position = None
-        db.flush()
-        remaining_pipeline = list(db.scalars(
-            select(Gate)
-            .where(Gate.active.is_(True), Gate.pipeline_position.is_not(None))
-            .order_by(Gate.pipeline_position)
-        ))
-        for position, gate in enumerate(remaining_pipeline):
-            gate.pipeline_position = position
-        record_audit(
-            db, "SECURITY_PIPELINE_UPDATED", "USER", user.id, "SECURITY_PIPELINE", None,
-            {
-                "reason": "gate_deactivated",
-                "removed_gate": item.slug,
-                "gates": [gate.slug for gate in remaining_pipeline],
-            },
-            source_ip(request),
-        )
     record_audit(db, "GATE_UPDATED", "USER", user.id, "GATE", item.id, {"fields": list(changes)}, source_ip(request))
     commit_unique(db, "Gate identifier already exists")
     db.refresh(item)
     return item
 
 
-def serialize_security_pipeline(gates: list[Gate]) -> SecurityPipelineResponse:
+def serialize_security_pipeline(policy: GatePolicy) -> SecurityPipelineResponse:
     return SecurityPipelineResponse(gates=[
-        {"id": gate.id, "name": gate.name, "slug": gate.slug, "position": gate.pipeline_position}
-        for gate in gates
-        if gate.pipeline_position is not None
+        {"id": scope.gate.id, "name": scope.gate.name, "slug": scope.gate.slug, "position": scope.position}
+        for scope in sorted(policy.gates, key=lambda item: item.position)
     ])
 
 
 @router.get("/security-pipeline", response_model=SecurityPipelineResponse)
 def get_security_pipeline(db: Session = Depends(get_db), _: User = Depends(admin_user)):
-    gates = list(db.scalars(
-        select(Gate)
-        .where(Gate.active.is_(True), Gate.pipeline_position.is_not(None))
-        .order_by(Gate.pipeline_position)
-    ))
-    return serialize_security_pipeline(gates)
+    policy = ensure_default_gate_policy(db)
+    return serialize_security_pipeline(policy)
 
 
 @router.patch("/security-pipeline", response_model=SecurityPipelineResponse)
@@ -206,16 +220,16 @@ def update_security_pipeline(
         raise HTTPException(400, "Inactive gates cannot be added to the security pipeline")
 
     ordered = [selected_by_id[gate_id] for gate_id in data.gate_ids]
-    previous = list(db.scalars(
-        select(Gate)
-        .where(Gate.pipeline_position.is_not(None))
-        .order_by(Gate.pipeline_position)
-    ))
-    for gate in previous:
-        gate.pipeline_position = None
-    db.flush()
-    for position, gate in enumerate(ordered):
-        gate.pipeline_position = position
+    policy = ensure_default_gate_policy(db)
+    previous = [scope.gate for scope in sorted(policy.gates, key=lambda item: item.position)]
+    from app.schemas.admin import GatePolicyGateInput
+    replace_policy_gates(db, policy, [
+        GatePolicyGateInput(
+            gate_id=gate.id,
+            blocking_severities=gate.default_blocking_severities,
+        )
+        for gate in ordered
+    ])
 
     record_audit(
         db, "SECURITY_PIPELINE_UPDATED", "USER", user.id, "SECURITY_PIPELINE", None,
@@ -226,7 +240,81 @@ def update_security_pipeline(
         source_ip(request),
     )
     commit_unique(db, "Security pipeline positions conflict")
-    return serialize_security_pipeline(ordered)
+    policy = get_gate_policy(db, policy.id)
+    return serialize_security_pipeline(policy)
+
+
+@router.get("/gate-policies", response_model=list[GatePolicyResponse])
+def list_gate_policies(db: Session = Depends(get_db), _: User = Depends(admin_user)):
+    policies = list(db.scalars(gate_policy_query().order_by(GatePolicy.name)).unique())
+    return [serialize_gate_policy(db, policy) for policy in policies]
+
+
+@router.post("/gate-policies", response_model=GatePolicyResponse, status_code=201)
+def create_gate_policy(
+    data: GatePolicyCreate, request: Request, db: Session = Depends(get_db), user: User = Depends(admin_user),
+):
+    item = GatePolicy(
+        id=uuid4(), name=data.name.strip(), slug=data.slug, description=data.description, active=True,
+    )
+    db.add(item)
+    db.flush()
+    gates = replace_policy_gates(db, item, data.gates)
+    record_audit(db, "GATE_POLICY_CREATED", "USER", user.id, "GATE_POLICY", item.id, {
+        "slug": item.slug,
+        "gates": [gate.slug for gate in gates],
+    }, source_ip(request))
+    commit_unique(db, "Gate policy identifier or gate order already exists")
+    item = get_gate_policy(db, item.id)
+    return serialize_gate_policy(db, item)
+
+
+@router.get("/gate-policies/{policy_id}", response_model=GatePolicyResponse)
+def get_gate_policy_endpoint(
+    policy_id: UUID, db: Session = Depends(get_db), _: User = Depends(admin_user),
+):
+    item = get_gate_policy(db, policy_id)
+    if not item:
+        raise HTTPException(404, "Gate policy not found")
+    return serialize_gate_policy(db, item)
+
+
+@router.patch("/gate-policies/{policy_id}", response_model=GatePolicyResponse)
+def update_gate_policy(
+    policy_id: UUID, data: GatePolicyUpdate, request: Request, db: Session = Depends(get_db),
+    user: User = Depends(admin_user),
+):
+    item = get_gate_policy(db, policy_id)
+    if not item:
+        raise HTTPException(404, "Gate policy not found")
+    changes = data.model_dump(exclude_unset=True)
+    if changes.get("active") is False:
+        assigned = db.scalar(select(func.count(Application.id)).where(
+            Application.gate_policy_id == item.id, Application.active.is_(True),
+        )) or 0
+        if assigned:
+            raise HTTPException(409, "Reassign active applications before deactivating this gate policy")
+    requested_gates = data.gates if "gates" in changes else None
+    changes.pop("gates", None)
+    previous_gates = [scope.gate.slug for scope in item.gates]
+    if changes.get("active") is True and requested_gates is None:
+        if not item.gates or any(not scope.gate.active for scope in item.gates):
+            raise HTTPException(409, "Replace inactive or missing gates before activating this gate policy")
+    for key, value in changes.items():
+        setattr(item, key, value.strip() if isinstance(value, str) else value)
+    if requested_gates is not None:
+        gates = replace_policy_gates(db, item, requested_gates)
+        updated_gates = [gate.slug for gate in gates]
+    else:
+        updated_gates = previous_gates
+    record_audit(db, "GATE_POLICY_UPDATED", "USER", user.id, "GATE_POLICY", item.id, {
+        "fields": list(data.model_fields_set),
+        "previous_gates": previous_gates,
+        "gates": updated_gates,
+    }, source_ip(request))
+    commit_unique(db, "Gate policy identifier or gate order already exists")
+    item = get_gate_policy(db, item.id)
+    return serialize_gate_policy(db, item)
 
 
 @router.get("/bypass-policies", response_model=list[PolicyResponse])

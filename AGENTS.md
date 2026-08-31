@@ -78,17 +78,19 @@ server is deployed. Do not bypass the policy check to resolve that cycle.
 
 ## Fail-closed enforcement invariants
 
-`POST /api/v1/policies/resolve-pipeline` is the pre-scan contract. It returns
-only active gates selected in the administrator-managed global pipe, in unique
-contiguous order. Unknown/inactive applications return `404`; an empty pipe
-returns `503`. The pipeline API credential must remain isolated to preflight and
-policy jobs and must never be exposed to scanner jobs.
+`POST /api/v1/policies/resolve-pipeline` is the pre-scan contract. It resolves
+the exact active gate policy assigned to the requested application and returns
+only that policy's active gates in unique contiguous order. Unknown/inactive
+applications return `404`; a missing, inactive, empty, malformed, or
+inactive-gate policy returns `503`. The pipeline API credential must remain
+isolated to preflight and policy jobs and must never be exposed to scanner jobs.
 
 `POST /api/v1/policies/evaluate-enforcement` is the authoritative pipeline
 contract. Preserve all of these behaviors:
 
-- begin with every active gate's configured default blocking severities;
-- treat an empty or malformed stored default as all canonical severities;
+- for a known application, begin with each selected policy gate's blocking severities;
+- treat an empty or malformed stored policy severity set as all canonical severities;
+- for an unknown application, retain the active gate catalog defaults as fail-closed behavior;
 - remove only severities covered by an effective bypass for the exact active
   application and gate;
 - return unchanged defaults for unknown or inactive applications;
@@ -111,8 +113,11 @@ confused with final enforcement calculation.
 - PostgreSQL exclusion constraints are the final defense against overlapping
   non-revoked `(application, gate)` windows; service validation alone is not
   sufficient under concurrency.
-- A multi-gate policy may contain only gates belonging to the same owner as the
-  policy. This prevents crossing owner authorization boundaries.
+- A multi-gate bypass policy may contain only gates belonging to the same owner
+  as the bypass policy. This prevents crossing owner authorization boundaries.
+- A reusable gate policy owns the selected gate order and per-gate blocking
+  severities. Each application has exactly one assigned policy; many
+  applications may share one policy.
 - `ADMIN` is the management/break-glass role. Normal users receive only the
   union of explicit permissions from active groups.
 - Direct-object endpoints must independently enforce the same owner permission
@@ -120,8 +125,11 @@ confused with final enforcement calculation.
 - Application mutation, access management, API credentials, dashboards, and
   audit logs remain administrator-only unless an explicit authorization design
   is reviewed.
-- Global security-pipeline membership and ordering remain administrator-only.
-  Owner-scoped gate permissions do not authorize changing the shared pipe.
+- Reusable gate-policy creation, editing, activation, and application assignment
+  remain administrator-only. Owner-scoped gate permissions do not authorize
+  changing standards that can affect applications outside that owner boundary.
+- An in-use active gate policy cannot be deactivated, and a gate referenced by
+  an active gate policy cannot be renamed or deactivated until it is removed.
 - Administrative writes and their audit events belong in the same transaction
   where applicable. Audit metadata must remain allow-limited and scrubbed.
 

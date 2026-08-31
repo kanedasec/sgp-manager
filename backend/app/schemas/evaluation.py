@@ -21,6 +21,8 @@ class ResolvedPipelineGate(BaseModel):
 
 class PipelineResolutionResponse(BaseModel):
     application: str
+    gate_policy: str
+    gate_policy_name: str
     generated_at: datetime
     gates: list[ResolvedPipelineGate]
 

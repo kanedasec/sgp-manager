@@ -1,4 +1,4 @@
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, formatDate } from '../api'
@@ -14,6 +14,7 @@ export default function ApplicationDetail() {
   const active = policies.filter(p => p.status === 'ACTIVE')
   const table = (rows: Policy[], empty: string) => rows.length ? <div className="table-wrap"><table><thead><tr><th>Gate policies</th><th>Validity</th><th>Status</th></tr></thead><tbody>{rows.map(p => <tr key={p.id}><td><div className="scope-summary">{p.gates.map(g => <div key={g.gate_id}><b>{g.gate_name}</b><small>{g.gate_slug}</small><div className="badge-row">{g.severities.map(s => <Badge key={s} tone={s}>{s}</Badge>)}</div></div>)}</div></td><td>{formatDate(p.valid_from)}<small>until {formatDate(p.expires_at)}</small></td><td><Badge tone={p.status}>{p.status}</Badge></td></tr>)}</tbody></table></div> : <Empty title={empty} detail="No matching policy records are available." />
   return <><Link className="back-link" to="/applications"><ArrowLeft size={16} /> Applications</Link><PageHeader eyebrow={`APPLICATION / ${application.slug}`} title={application.name} description={application.description || 'Application policy history and effective bypasses.'} action={<Badge tone={application.active ? 'active' : 'revoked'}>{application.active ? 'ACTIVE' : 'INACTIVE'}</Badge>} />
+    {application.gate_policy && <section className="assigned-policy-banner"><ShieldCheck /><div><span>ASSIGNED GATE POLICY</span><h2>{application.gate_policy.name}</h2><code>{application.gate_policy.slug}</code></div><p>This server-side assignment determines which scanner jobs run and which finding severities block.</p></section>}
     <section className="panel"><div className="panel-head"><div><span className="eyebrow">EFFECTIVE NOW</span><h2>Active Bypasses</h2></div></div>{table(active, 'No active bypasses')}</section>
     <section className="panel"><div className="panel-head"><div><span className="eyebrow">IMMUTABLE TRAIL</span><h2>Bypass History</h2></div></div>{table(policies, 'No bypass history')}</section>
   </>

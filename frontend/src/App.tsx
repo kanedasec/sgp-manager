@@ -10,6 +10,7 @@ import Dashboard from './pages/Dashboard'
 import Entities from './pages/Entities'
 import Login from './pages/Login'
 import Policies from './pages/Policies'
+import GatePolicies from './pages/GatePolicies'
 import ChangePassword from './pages/ChangePassword'
 
 function Protected() {
@@ -45,6 +46,7 @@ export default function App() {
       <Route path="applications" element={<Entities kind="applications" />} />
       <Route path="applications/:id" element={<ApplicationDetail />} />
       <Route path="gates" element={<Entities kind="gates" />} />
+      <Route path="gate-policies" element={<AdminOnly><GatePolicies /></AdminOnly>} />
       <Route path="policies" element={<Policies />} />
       <Route path="access" element={<AdminOnly><AccessManagement /></AdminOnly>} />
       <Route path="credentials" element={<Navigate to="/access?tab=credentials" replace />} />
