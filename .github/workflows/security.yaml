@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Resolve central security pipeline
         id: resolve
-        uses: kanedasec/platform-workflows/actions/sgp-pipeline-config@988ed5afc2652a81b4b0eb07f4496264259712f3
+        uses: kanedasec/platform-workflows/actions/sgp-pipeline-config@401956bdb15b5894686b875a6233fabda3f81eb0
         env:
           SGP_MANAGER_API_KEY: ${{ secrets.SGP_MANAGER_API_KEY }}
 
@@ -39,17 +39,17 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  differential-security:
-    name: Differential security
+  security-scans:
+    name: Full repository security
     needs: pipeline-config
-    uses: kanedasec/platform-workflows/.github/workflows/security-differential.yaml@988ed5afc2652a81b4b0eb07f4496264259712f3
+    uses: kanedasec/platform-workflows/.github/workflows/security.yaml@401956bdb15b5894686b875a6233fabda3f81eb0
     with:
       gates: ${{ needs.pipeline-config.outputs.gates }}
 
   policy-gate:
     name: Security policy (SGP Manager)
     if: always()
-    needs: [pipeline-config, differential-security]
+    needs: [pipeline-config, security-scans]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:
@@ -61,7 +61,7 @@ jobs:
       - name: Require successful pipeline discovery and scanners
         env:
           PIPELINE_RESULT: ${{ needs.pipeline-config.result }}
-          SCANNER_RESULT: ${{ needs.differential-security.result }}
+          SCANNER_RESULT: ${{ needs.security-scans.result }}
         run: |
           if [[ "$PIPELINE_RESULT" != "success" || "$SCANNER_RESULT" != "success" ]]; then
             echo "Security prerequisites failed: pipeline=$PIPELINE_RESULT scanners=$SCANNER_RESULT"
@@ -69,7 +69,7 @@ jobs:
           fi
 
       - name: Apply centralized security policies
-        uses: kanedasec/platform-workflows/actions/sgp-policy-from-artifacts@988ed5afc2652a81b4b0eb07f4496264259712f3
+        uses: kanedasec/platform-workflows/actions/sgp-policy-from-artifacts@401956bdb15b5894686b875a6233fabda3f81eb0
         env:
           SGP_MANAGER_API_KEY: ${{ secrets.SGP_MANAGER_API_KEY }}
         with:
