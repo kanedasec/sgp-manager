@@ -46,7 +46,7 @@ local development and bootstrap behavior; production must not build from
 ```text
 feature branch -> pull request
   |-> backend tests + frontend build + workflow validation
-  `-> SGP pipeline preflight -> selected differential scanners -> currently deployed SGP Manager gate
+  `-> SGP pipeline preflight -> selected full-repository scanners -> currently deployed SGP Manager gate
 protected merge -> main
   -> repeat CI
   -> publish backend and frontend with one sha tag
