@@ -3,6 +3,8 @@
 Revision ID: 20260826_0004
 Revises: 20260826_0003
 """
+from uuid import UUID
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -29,15 +31,21 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_owner_labels_slug", "owner_labels", ["slug"], unique=True)
-    op.execute(
-        "INSERT INTO owner_labels (id, name, slug, description, active, created_at, updated_at) VALUES "
-        f"('{UNASSIGNED_OWNER_ID}'::uuid, 'Unassigned', 'unassigned', "
-        "'Migration owner for gates and policies created before owner-scoped RBAC.', true, now(), now())"
+    op.get_bind().execute(
+        sa.text(
+            "INSERT INTO owner_labels "
+            "(id, name, slug, description, active, created_at, updated_at) "
+            "VALUES (:owner_id, 'Unassigned', 'unassigned', "
+            "'Migration owner for gates and policies created before owner-scoped RBAC.', "
+            "true, now(), now())"
+        ),
+        {"owner_id": UUID(UNASSIGNED_OWNER_ID)},
     )
 
     for table in ("gates", "bypass_policies"):
         op.add_column(table, sa.Column("owner_id", sa.Uuid(), nullable=True))
-        op.execute(f"UPDATE {table} SET owner_id = '{UNASSIGNED_OWNER_ID}'::uuid")
+        owner_table = sa.table(table, sa.column("owner_id", sa.Uuid()))
+        op.execute(sa.update(owner_table).values(owner_id=UUID(UNASSIGNED_OWNER_ID)))
         op.alter_column(table, "owner_id", nullable=False)
         op.create_foreign_key(
             f"{table}_owner_id_fkey", table, "owner_labels", ["owner_id"], ["id"], ondelete="RESTRICT"
