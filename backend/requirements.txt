@@ -9,3 +9,4 @@ argon2-cffi==25.1.0
 email-validator==2.2.0
 python-multipart==0.0.31
 prometheus-client==0.22.1
+redis==5.2.1

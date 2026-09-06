@@ -145,7 +145,7 @@ For enforcement, an unknown or inactive application receives unchanged gate defa
 - A one-shot, network-disabled `secrets-init` container creates the PostgreSQL password, JWT secret, and API-key pepper from `/dev/urandom` when the `runtime_secrets` volume is empty. Values are never logged and are mounted read-only into consumers. Explicit environment overrides are copied only during initial volume creation.
 - Backend and frontend run unprivileged. PostgreSQL publishes no port, joins only the `internal: true` database network, and is not reachable by the frontend container.
 - `postgres_data` and `runtime_secrets` form one recoverability unit: restoring the database without its matching secret volume requires an explicit database credential recovery procedure.
-- The MVP rate limiter is local to a process. A shared/edge limiter is required when horizontally scaling.
+- The pipeline evaluation rate limiter (`/policies/evaluate`, `/resolve-pipeline`, `/evaluate-enforcement`) counts hits per client address in Redis (`REDIS_URL`), shared across all backend replicas via a fixed 60-second window incremented atomically (`INCR` + conditional `EXPIRE` in one Lua script). Rate limiting is an anti-abuse control, not the authentication/authorization boundary, so a Redis outage degrades to a per-process in-memory counter (widening the effective limit across replicas) rather than blocking pipeline calls; the first fallback after an outage is logged as a warning so the degradation is observable. Deployments without `REDIS_URL` configured run the per-process counter directly, matching the previous single-replica behavior.
 
 ## Evolution
 

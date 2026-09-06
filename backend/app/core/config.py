@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     expiring_soon_days: int = 7
     evaluate_rate_limit_per_minute: int = 120
+    redis_url: str | None = None
+    rate_limit_redis_timeout_seconds: float = 0.2
     initial_admin_username: str | None = Field(default=None, min_length=2, max_length=64)
     initial_admin_password: SecretStr | None = None
     initial_admin_email: EmailStr | None = None
