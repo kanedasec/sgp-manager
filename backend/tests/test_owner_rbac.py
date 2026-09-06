@@ -171,6 +171,36 @@ def test_regular_user_cannot_manage_access_or_credentials(client, admin_headers)
     assert client.get("/api/v1/admin/audit-logs", headers=headers).status_code == 403
 
 
+def test_user_with_no_permissions_cannot_read_admin_inventory(client, admin_headers):
+    empty_group = client.post("/api/v1/admin/groups", headers=admin_headers, json={
+        "name": "No Access", "slug": "no-access", "permissions": [],
+    })
+    assert empty_group.status_code == 201
+    created = client.post("/api/v1/admin/users", headers=admin_headers, json={
+        "username": "no.access", "password": "NoAccessPass!123", "display_name": "No Access",
+        "email": "no.access@example.com", "role": "USER", "group_ids": [empty_group.json()["id"]],
+    })
+    assert created.status_code == 201
+    headers, session_user = login_headers(client, "no.access", "NoAccessPass!123")
+    assert session_user["permissions"] == []
+
+    assert client.get("/api/v1/admin/applications", headers=headers).status_code == 403
+    assert client.get("/api/v1/admin/owner-labels", headers=headers).status_code == 403
+    assert client.get("/api/v1/admin/gates", headers=headers).status_code == 403
+    assert client.get("/api/v1/admin/bypass-policies", headers=headers).status_code == 403
+
+    appsec = create_owner(client, admin_headers, "AppSec", "appsec")
+    gate = create_gate(client, admin_headers, appsec, "Secrets", "secrets")
+    gate_policy = create_gate_policy(client, admin_headers, gate, "application-standard")
+    application = client.post(
+        "/api/v1/admin/applications", headers=admin_headers,
+        json={"name": "Payment API", "slug": "payment-api", "gate_policy_id": gate_policy["id"]},
+    ).json()
+    assert client.get(
+        f"/api/v1/admin/applications/{application['id']}", headers=headers,
+    ).status_code == 403
+
+
 def test_invalid_or_unknown_owner_role_is_rejected(client, admin_headers):
     invalid = client.post("/api/v1/admin/groups", headers=admin_headers, json={
         "name": "Invalid", "slug": "invalid", "permissions": ["delete-policies:all"],
