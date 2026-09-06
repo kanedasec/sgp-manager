@@ -23,6 +23,21 @@ def require_admin(user: User) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator access required")
 
 
+def has_any_permission(user: User) -> bool:
+    """True for admins and for users whose active groups grant at least one
+    gates/policies permission. Used to gate read endpoints (applications,
+    owner labels) that have no single owner to scope against but must not
+    be readable by an authenticated user with zero assigned entitlements."""
+    if is_admin(user):
+        return True
+    return any(group.active and group.permissions for group in user.groups)
+
+
+def require_any_permission(user: User) -> None:
+    if not has_any_permission(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "No assigned permissions")
+
+
 def permission_name(permission: GroupPermission) -> str:
     owner = permission.owner.slug if permission.owner else "all"
     return f"{permission.action}-{permission.resource}:{owner}"

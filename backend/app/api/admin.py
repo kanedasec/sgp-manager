@@ -24,7 +24,7 @@ from app.schemas.admin import (
     UserAdminCreate, UserAdminResponse, UserAdminUpdate,
 )
 from app.services.audit import record_audit
-from app.services.access import permitted_owner_ids, require_permission
+from app.services.access import permitted_owner_ids, require_any_permission, require_permission
 from app.services.gate_policies import (
     ensure_default_gate_policy, gate_policy_query, get_gate_policy, replace_policy_gates,
     serialize_gate_policy,
@@ -55,15 +55,17 @@ def require_active_gate_policy(db: Session, policy_id: UUID) -> GatePolicy:
 
 
 @router.get("/owner-labels", response_model=list[OwnerResponse])
-def list_owner_labels(db: Session = Depends(get_db)):
+def list_owner_labels(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_any_permission(user)
     return list(db.scalars(select(OwnerLabel).where(OwnerLabel.active.is_(True)).order_by(OwnerLabel.name)))
 
 
 @router.get("/applications", response_model=list[ApplicationResponse])
 def list_applications(
     search: str | None = Query(default=None, max_length=100), include_inactive: bool = True,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), user: User = Depends(current_user),
 ):
+    require_any_permission(user)
     query = select(Application)
     if search:
         term = f"%{search.strip()}%"
@@ -90,7 +92,8 @@ def create_application(data: ApplicationCreate, request: Request, db: Session = 
 
 
 @router.get("/applications/{item_id}", response_model=ApplicationResponse)
-def get_application(item_id: UUID, db: Session = Depends(get_db)):
+def get_application(item_id: UUID, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_any_permission(user)
     item = db.get(Application, item_id)
     if not item:
         raise HTTPException(404, "Application not found")
@@ -123,6 +126,7 @@ def update_application(item_id: UUID, data: ApplicationUpdate, request: Request,
 def list_gates(
     include_inactive: bool = True, db: Session = Depends(get_db), user: User = Depends(current_user),
 ):
+    require_any_permission(user)
     query = select(Gate)
     allowed = permitted_owner_ids(user, "gates", "view")
     if allowed is not None:
@@ -323,6 +327,7 @@ def list_policies(
     valid_from: datetime | None = None, valid_until: datetime | None = None, db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    require_any_permission(user)
     query = policy_query()
     allowed = permitted_owner_ids(user, "policies", "view")
     if allowed is not None:
