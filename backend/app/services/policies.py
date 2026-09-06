@@ -30,6 +30,7 @@ def serialize_policy(policy: BypassPolicy) -> PolicyResponse:
             gate_name=scope.gate.name,
             gate_slug=scope.gate.slug,
             severities=scope.severities,
+            finding_scope=scope.finding_scope or None,
         ) for scope in scopes],
         justification=policy.justification,
         valid_from=policy.valid_from,
@@ -82,6 +83,7 @@ def replace_policy_scopes(
             scope = BypassPolicyGate(id=uuid4(), application_id=policy.application_id, gate_id=item.gate_id)
             policy.gate_scopes.append(scope)
         scope.severities = [severity.value for severity in item.severities]
+        scope.finding_scope = list(item.finding_scope) if item.finding_scope else None
         scope.valid_from = valid_from
         scope.expires_at = expires_at
         scope.revoked_at = policy.revoked_at
@@ -112,7 +114,11 @@ def create_policy(db: Session, data: PolicyCreate, user: User, source_ip: str | 
             "owner": owner.slug,
             "gates": [gate.slug for gate in resolved_gates],
             "gate_policies": [
-                {"gate": gate.slug, "severities": [s.value for s in requested.severities]}
+                {
+                    "gate": gate.slug,
+                    "severities": [s.value for s in requested.severities],
+                    "finding_scope": requested.finding_scope or None,
+                }
                 for gate, requested in zip(resolved_gates, data.gates, strict=True)
             ],
             "expires_at": data.expires_at.isoformat(),

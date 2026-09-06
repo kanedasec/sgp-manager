@@ -30,6 +30,7 @@ class PipelineResolutionResponse(BaseModel):
 class EvaluatedPolicy(BaseModel):
     gate: str
     bypass_severities: list[str]
+    finding_scope: list[str] | None = None
     expires_at: datetime
 
 
@@ -42,6 +43,17 @@ class EvaluationResponse(BaseModel):
 class EvaluatedGateEnforcement(BaseModel):
     gate: str
     blocking_severities: list[str]
+    bypassed_findings: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Specific finding identifiers (CVE IDs or scanner fingerprints) that are "
+            "excluded from blocking even though their severity remains in "
+            "blocking_severities. A finding-scoped bypass narrows the exception to "
+            "exactly these findings instead of bulk-clearing the whole severity: the "
+            "consumer must still block every other finding at a blocking severity that "
+            "is not listed here."
+        ),
+    )
 
 
 class EnforcementEvaluationResponse(BaseModel):

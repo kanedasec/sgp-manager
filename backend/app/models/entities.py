@@ -200,7 +200,18 @@ class BypassPolicy(Base):
 
 
 class BypassPolicyGate(Base):
-    """One explicitly selected gate inside an auditable, application-level policy."""
+    """One explicitly selected gate inside an auditable, application-level policy.
+
+    ``finding_scope`` is an optional allow-list of finding identifiers (CVE
+    IDs such as ``CVE-2026-12345`` or scanner-supplied fingerprints such as
+    ``semgrep:rule-id:path/to/file.py:42``) that narrows the bypass to those
+    exact findings. ``None``/empty means the bypass covers every finding at
+    the selected severities for this gate, matching the original coarse
+    severity-only behavior. A pipeline that does not yet report findings
+    never benefits from a finding-scoped bypass (see
+    ``evaluate_enforcement``): the scoped exception simply does not apply,
+    which is the fail-closed choice for an unrecognized narrower policy.
+    """
 
     __tablename__ = "bypass_policy_gates"
     __table_args__ = (
@@ -212,6 +223,7 @@ class BypassPolicyGate(Base):
     application_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("applications.id", ondelete="RESTRICT"), index=True)
     gate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("gates.id", ondelete="RESTRICT"), index=True)
     severities: Mapped[list[str]] = mapped_column(JSON)
+    finding_scope: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

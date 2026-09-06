@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from app.schemas.common import Slug, ensure_utc
+from app.schemas.common import FindingId, Slug, ensure_utc
 
 
 class Severity(str, Enum):
@@ -208,11 +208,29 @@ class GatePolicyResponse(BaseModel):
 class PolicyGateInput(BaseModel):
     gate_id: UUID
     severities: list[Severity] = Field(min_length=1, max_length=4)
+    finding_scope: list[FindingId] | None = Field(
+        default=None, max_length=200,
+        description=(
+            "Optional allow-list of specific finding identifiers (CVE IDs or scanner "
+            "fingerprints) this bypass applies to. Omitted or empty means the bypass "
+            "covers every finding at the selected severities for this gate, matching "
+            "the original coarse severity-only behavior."
+        ),
+    )
 
     @field_validator("severities")
     @classmethod
     def unique_severities(cls, value: list[Severity]) -> list[Severity]:
         return normalize_severities(value)
+
+    @field_validator("finding_scope")
+    @classmethod
+    def unique_finding_scope(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if len(set(value)) != len(value):
+            raise ValueError("duplicate finding identifiers are not allowed")
+        return sorted(value)
 
 
 class PolicyGateResponse(BaseModel):
@@ -220,6 +238,7 @@ class PolicyGateResponse(BaseModel):
     gate_name: str
     gate_slug: str
     severities: list[str]
+    finding_scope: list[str] | None = None
 
 
 class PolicyCreate(BaseModel):

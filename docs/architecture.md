@@ -33,7 +33,7 @@ The backend is separated into HTTP routes (`api`), input/output contracts (`sche
 - `GatePolicy`: reusable named security standard assigned to one or more applications.
 - `GatePolicyGate`: ordered gate membership and the policy-specific blocking severity set. A gate appears at most once per policy and positions are contiguous at the API boundary.
 - `BypassPolicy`: application-level, owner-scoped, auditable policy header containing justification, half-open validity window, creator and revocation trail.
-- `BypassPolicyGate`: one gate scope inside a policy, with an independent JSON severity set. A policy may contain many gate scopes but a gate appears at most once in that policy.
+- `BypassPolicyGate`: one gate scope inside a policy, with an independent JSON severity set and an optional JSON `finding_scope` allow-list (CVE IDs or scanner fingerprints). A policy may contain many gate scopes but a gate appears at most once in that policy.
 - `ApiCredential`: human label, non-secret prefix, HMAC digest, `policy:read` scopes array, usage/expiry timestamps, and active flag.
 - `AuditLog`: actor, event, target, timestamp, sanitized metadata, and source IP. There is no administrative delete API.
 
@@ -77,6 +77,11 @@ active `sast`, `secrets`, and `sca` gates are backfilled at positions 0, 1, and
 2. Other gates remain outside the pipe until explicitly selected by an
 administrator.
 
+Migration `20260906_0008` adds the nullable `finding_scope` JSON column to
+`bypass_policy_gates`. Existing rows are unaffected (`NULL`), which preserves
+their original whole-severity bypass behavior; a bypass only narrows to
+specific findings when an administrator explicitly sets this field.
+
 Migration `20260831_0007` creates reusable gate policies, copies the existing
 global pipe and each gate's blocking defaults into a deterministic **Default
 Security Policy**, assigns every existing application to it, and removes the
@@ -109,6 +114,12 @@ administrator removes it from those policies. These constraints prevent a gate
 catalog edit from silently changing or invalidating application pipelines.
 
 A multi-gate bypass policy can contain only gates whose owner equals the policy owner. This is a deliberate isolation rule: without it, a user with `create-policies:appsec` could place a Quality-owned gate into an AppSec policy and cross the authorization boundary.
+
+### Finding-scoped bypasses
+
+By default a bypass gate scope's `severities` array suppresses every finding at those severities for the gate — a coarse exception. A gate scope may optionally set `finding_scope` to an allow-list of specific finding identifiers (a CVE ID such as `CVE-2026-12345`, or a scanner-supplied fingerprint such as `semgrep:rule-id:path/to/file.py:42`). This narrows what the exception actually covers without requiring a different data model per scanner.
+
+`finding_scope` never bulk-removes a severity from `evaluate-enforcement`'s `blocking_severities`: the server cannot prove every finding at a severity is covered by a scoped bypass, only that the specific listed identifiers are. Instead, matching finding IDs are returned in a separate `bypassed_findings` array, and the pipeline consumer is responsible for suppressing only those exact findings while still blocking every other finding at a blocking severity. An unscoped gate scope (`finding_scope` empty or absent) keeps the original behavior and continues to remove the whole severity, which remains the default and the only behavior for scanners that do not report per-finding identifiers to the pipeline.
 
 ### Pipelines
 

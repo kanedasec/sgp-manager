@@ -172,13 +172,30 @@ curl --fail-with-body -X POST \
   "gates": [
     {
       "gate": "secrets",
-      "blocking_severities": ["critical"]
+      "blocking_severities": ["critical"],
+      "bypassed_findings": []
     }
   ]
 }
 ```
 
-For example, if `secrets` blocks `medium`, `high`, and `critical` by default while an active bypass authorizes `medium` and `high`, only `critical` remains blocking. Unknown or inactive applications receive the complete gate defaults with no bypass reduction. An unknown requested gate returns `404`; consumers must treat every non-2xx or malformed response as **BLOCK / NO BYPASS**.
+For example, if `secrets` blocks `medium`, `high`, and `critical` by default while an active bypass authorizes `medium` and `high` with no `finding_scope`, only `critical` remains blocking. Unknown or inactive applications receive the complete gate defaults with no bypass reduction. An unknown requested gate returns `404`; consumers must treat every non-2xx or malformed response as **BLOCK / NO BYPASS**.
+
+A bypass gate scope may optionally set `finding_scope` to a list of specific finding identifiers (CVE IDs like `CVE-2026-12345`, or scanner fingerprints like `semgrep:rule-id:path/to/file.py:42`) instead of clearing an entire severity. A finding-scoped bypass never removes a severity from `blocking_severities`; the matching identifiers are returned in `bypassed_findings` instead, and the pipeline must suppress only those exact findings while still blocking everything else at a blocking severity:
+
+```json
+{
+  "application": "payment-api",
+  "generated_at": "2026-08-26T21:30:00Z",
+  "gates": [
+    {
+      "gate": "secrets",
+      "blocking_severities": ["high", "critical"],
+      "bypassed_findings": ["CVE-2026-98765"]
+    }
+  ]
+}
+```
 
 The original bypass-inspection endpoint remains available for compatible consumers:
 
