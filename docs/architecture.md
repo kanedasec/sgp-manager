@@ -114,6 +114,8 @@ view-gates:quality
 
 The allowed action set is `view`, `create`, and `edit`; the current resource set is `gates` and `policies`. `:all` is a wildcard owner scope, not an owner label, and the slug `all` is reserved. `edit-policies` covers normal edits and manual revocation. Permission checks use owner UUIDs internally.
 
+`app.services.access.ACTIONS`/`RESOURCES` are the single source of truth for this vocabulary: the validation regex (`ROLE_PATTERN`) is generated from them rather than duplicating the list, and `GET /admin/roles` returns `actions`/`resources` alongside the computed `roles` list so the portal's role-matrix UI (`frontend/src/pages/Groups.tsx`) renders from the same vocabulary the server enforces, instead of a hardcoded frontend copy that could silently drift from what the backend actually accepts. Extending the vocabulary (a new resource or action) is a one-line change to those two tuples; the regex, the `/admin/roles` response, and the portal UI all follow automatically.
+
 List queries are filtered to owners for which the actor has `view`; direct-object requests independently verify the same permission. Creation checks the requested owner. Owner changes check edit permission for both the source and destination boundary. Access management, dashboard, application mutation, API credentials, and audit logs are administrator-only. The application catalog is readable by authenticated users because it is shared context for authorized gate and policy work.
 
 Gate-policy management and application assignment are administrator-only because

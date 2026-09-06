@@ -15,3 +15,4 @@ export type DashboardData = { applications: number; gates: number; active_bypass
 export type GroupSummary = { id: string; name: string; slug: string; active: boolean }
 export type AdminUser = { id: string; username: string; display_name: string; email: string; role: string; active: boolean; created_at: string; updated_at: string; groups: GroupSummary[] }
 export type AccessGroup = { id: string; name: string; slug: string; description?: string | null; active: boolean; permissions: string[]; user_count: number; created_at: string; updated_at: string }
+export type AvailableRoles = { roles: string[]; actions: string[]; resources: string[] }
