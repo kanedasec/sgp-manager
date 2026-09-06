@@ -279,6 +279,8 @@ For the same application and gate, non-revoked half-open time windows `[valid_fr
 - Owner checks are enforced by the backend on list, detail, create, update, and revoke operations; the portal's hidden controls are usability aids, not the authorization boundary.
 - Application containers run as non-root users. PostgreSQL is not published to the host, belongs only to an internal database network, and is unreachable directly from the frontend network.
 - `/metrics` is intentionally unauthenticated for scraping. Protect this route at an external ingress when port `3000` is reachable from an untrusted network.
+- `/metrics` includes business-domain series (active bypasses per owner, enforcement block/pass counts per gate, audit event counts, audit webhook delivery outcomes) in addition to HTTP transport counters.
+- An optional `AUDIT_WEBHOOK_URL` forwards every audit event as a signed (HMAC-SHA256, `X-SGP-Signature` header) HTTP POST to an external SIEM, delivered asynchronously after the owning transaction commits so a SIEM outage never blocks an administrative request. `audit_logs` in PostgreSQL remains the durable source of truth regardless of webhook delivery outcome.
 - The pipeline evaluation rate limiter is Redis-backed and shared across all backend replicas (`REDIS_URL`, default `redis://redis:6379/0` in Compose); a Redis outage degrades to a per-process counter rather than blocking pipeline calls, since rate limiting is an anti-abuse control and not the authentication/authorization boundary.
 
 ## Development and tests

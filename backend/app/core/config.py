@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     evaluate_rate_limit_per_minute: int = 120
     redis_url: str | None = None
     rate_limit_redis_timeout_seconds: float = 0.2
+    audit_webhook_url: str | None = None
+    audit_webhook_secret: SecretStr | None = None
+    audit_webhook_timeout_seconds: float = 5.0
+    audit_webhook_max_retries: int = 3
+    audit_webhook_deliver_synchronously: bool = False
     initial_admin_username: str | None = Field(default=None, min_length=2, max_length=64)
     initial_admin_password: SecretStr | None = None
     initial_admin_email: EmailStr | None = None

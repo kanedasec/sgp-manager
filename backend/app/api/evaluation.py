@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.dependencies import api_credential
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.metrics import record_enforcement_decision
 from app.core.rate_limit import hit_count
 from app.models import ApiCredential, Application, Gate, GatePolicy, GatePolicyGate
 from app.repositories.policies import effective_policy_scopes
@@ -185,6 +186,7 @@ def evaluate_enforcement(
         for scoped_severities, finding_ids in scoped_findings.get(gate.id, []):
             if scoped_severities & set(blocking):
                 bypassed_findings.update(finding_ids)
+        record_enforcement_decision(gate.slug, blocking)
         result.append(EvaluatedGateEnforcement(
             gate=gate.slug,
             blocking_severities=blocking,
