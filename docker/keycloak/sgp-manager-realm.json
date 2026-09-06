@@ -1,0 +1,55 @@
+{
+  "realm": "sgp-manager",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "clients": [
+    {
+      "clientId": "sgp-manager",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "secret": "dev-only-client-secret-replace-in-production",
+      "redirectUris": ["http://localhost:3000/*"],
+      "webOrigins": ["http://localhost:3000"],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "groups",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {"name": "sgp-admins"},
+    {"name": "sgp-users"}
+  ],
+  "users": [
+    {
+      "username": "dev-admin",
+      "enabled": true,
+      "email": "dev-admin@example.com",
+      "emailVerified": true,
+      "credentials": [{"type": "password", "value": "DevAdminPass!123", "temporary": false}],
+      "groups": ["/sgp-admins"]
+    },
+    {
+      "username": "dev-user",
+      "enabled": true,
+      "email": "dev-user@example.com",
+      "emailVerified": true,
+      "credentials": [{"type": "password", "value": "DevUserPass!123", "temporary": false}],
+      "groups": ["/sgp-users"]
+    }
+  ]
+}

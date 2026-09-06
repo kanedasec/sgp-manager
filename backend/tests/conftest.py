@@ -6,6 +6,7 @@ os.environ["JWT_SECRET"] = "test-jwt-secret-that-is-long-enough-123456789"
 os.environ["API_KEY_PEPPER"] = "test-api-pepper-that-is-long-enough-123456789"
 os.environ["ENVIRONMENT"] = "test"
 os.environ["INITIAL_ADMIN_PASSWORD"] = "StrongTestPass!123"
+os.environ["MFA_SECRET_KEY"] = "test-mfa-secret-key-that-is-long-enough-1234"
 
 import pytest
 from fastapi.testclient import TestClient

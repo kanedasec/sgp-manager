@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.config import get_settings
 from app.core.security import decode_access_token, hash_api_key
 from app.models import ApiCredential, User
+from app.models.entities import UserRole
 from app.services.access import require_admin
 
 
@@ -43,9 +44,42 @@ def authenticated_user(
     return resolve_admin_user(credentials.credentials, db)
 
 
+def mfa_setup_required(user: User) -> bool:
+    settings = get_settings()
+    return bool(settings.mfa_required_for_admins and user.role == UserRole.ADMIN and not user.mfa_enabled)
+
+
 def current_user(user: User = Depends(authenticated_user)) -> User:
     if user.must_change_password:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Password change required before accessing the portal")
+    if mfa_setup_required(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Multi-factor authentication enrollment is required for administrators before accessing the portal",
+        )
+    return user
+
+
+def mfa_pending_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db: Session = Depends(get_db)
+) -> User:
+    """Resolves the user tied to a short-lived mfa_pending token issued after
+    a correct username/password but before the TOTP code is verified. Used
+    only by /auth/mfa/verify; every other authenticated dependency requires
+    a full "admin" token and rejects this one, so a pending login cannot
+    reach any other endpoint."""
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required")
+    try:
+        payload = decode_access_token(credentials.credentials)
+        if payload.get("type") != "mfa_pending":
+            raise ValueError("wrong token type")
+        user_id = UUID(payload["sub"])
+    except (jwt.PyJWTError, KeyError, ValueError):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired MFA challenge") from None
+    user = db.get(User, user_id)
+    if not user or not user.active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or inactive user")
     return user
 
 
@@ -61,6 +95,11 @@ def docs_user(request: Request, db: Session = Depends(get_db)) -> User:
     user = resolve_admin_user(token, db)
     if user.must_change_password:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Password change required before accessing API documentation")
+    if mfa_setup_required(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Multi-factor authentication setup is required for administrators before accessing API documentation",
+        )
     return user
 
 

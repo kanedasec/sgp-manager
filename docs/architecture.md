@@ -89,6 +89,16 @@ obsolete gate-level pipeline position. The migration therefore preserves the
 effective scanner selection and severity behavior while changing ownership of
 that configuration from a global list to an application-assigned standard.
 
+## Federated identity (OIDC) and MFA
+
+Local username/password login (Argon2id) remains the break-glass path and is never removed: OIDC is an additive front door, not a replacement, so bootstrap and recovery are unaffected if the IdP is unreachable.
+
+When `OIDC_ENABLED=true` and `OIDC_ISSUER`/`OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET`/`OIDC_REDIRECT_URI` are configured, `GET /auth/oidc/login` returns an authorization URL from the IdP's discovery document, and `POST /auth/oidc/callback` completes the standard authorization-code flow: the `id_token` is verified against the IdP's JWKS (signature, issuer, audience, nonce), and the identity is matched to a local `User` by the stable, non-reassignable OIDC `sub` claim — never by email. A first-time login just-in-time provisions a local `User` row (`auth_provider=OIDC`, no local password) so all downstream authorization (group membership, owner-scoped permissions, audit trail) continues to reference the same UUID-keyed `User` model regardless of authentication method. The IdP's `groups` claim (configurable via `OIDC_GROUP_CLAIM`) is matched against `OIDC_ADMIN_GROUPS` to resolve `ADMIN` vs `USER`; local group/permission assignment for an OIDC user is still managed exactly like a local account through the existing `/admin/users` API. Migration `20260906_0009` makes `password_hash` nullable for OIDC-only accounts and adds `auth_provider`/`oidc_subject`.
+
+Keycloak (`docker compose --profile dev-oidc up`, `docker/keycloak/sgp-manager-realm.json`) is the reference IdP for local development, but the implementation only depends on the standard discovery document, token endpoint, and JWKS, so any spec-compliant IdP (Okta, Entra ID, Auth0, self-hosted Keycloak) works through configuration alone.
+
+Administrator TOTP MFA is independent of the authentication method: `POST /auth/mfa/enroll` generates a per-user secret encrypted at rest with a server-held key (`MFA_SECRET_KEY`/`MFA_SECRET_KEY_FILE`, bootstrapped the same way as the JWT signing key and API-key pepper), `POST /auth/mfa/enable` verifies a code and activates it, and login with MFA enabled returns a short-lived, narrowly typed `mfa_pending` token instead of a full session — that token is rejected by every other authenticated dependency, so a login that has not yet completed the MFA challenge cannot reach any portal or API endpoint, including `/auth/me`. `MFA_REQUIRED_FOR_ADMINS=true` blocks `ADMIN` accounts from every portal/API route until enrollment completes, mirroring the existing `must_change_password` bootstrap gate, and blocks disabling MFA while the policy is active.
+
 ## Portal authorization
 
 `ADMIN` is a protected break-glass/management role with implicit access to all portal functions. A `USER` has no gate or policy access by default. Its effective permissions are the union of permissions from all assigned active groups; inactive groups grant nothing.

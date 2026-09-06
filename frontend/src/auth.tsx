@@ -1,9 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { api } from './api'
 
-export type SessionUser = { id: string; username: string; display_name: string; email: string; role: string; groups: string[]; permissions: string[]; must_change_password: boolean }
+export type SessionUser = { id: string; username: string; display_name: string; email: string; role: string; groups: string[]; permissions: string[]; must_change_password: boolean; auth_provider: string; mfa_enabled: boolean }
+export type LoginResult = { mfaRequired: false } | { mfaRequired: true; mfaToken: string }
 type AuthValue = {
-  user: SessionUser | null; loading: boolean; login: (username: string, password: string) => Promise<void>;
+  user: SessionUser | null; loading: boolean; login: (username: string, password: string) => Promise<LoginResult>;
+  verifyMfa: (mfaToken: string, code: string) => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   logout: () => void; can: (resource: 'gates' | 'policies', action: 'view' | 'create' | 'edit', ownerSlug?: string) => boolean
 }
@@ -26,10 +28,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('sgbm-unauthorized', logout)
   }, [])
 
-  const login = async (username: string, password: string) => {
-    const result = await api<{ access_token: string; user: SessionUser }>('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })
+  const login = async (username: string, password: string): Promise<LoginResult> => {
+    const result = await api<{ access_token?: string; user?: SessionUser; mfa_required?: boolean; mfa_token?: string }>(
+      '/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) },
+    )
+    if (result.mfa_required && result.mfa_token) return { mfaRequired: true, mfaToken: result.mfa_token }
+    if (!result.access_token || !result.user) throw new Error('Unexpected login response')
     sessionStorage.setItem('sgbm_token', result.access_token)
     setUser(result.user)
+    return { mfaRequired: false }
+  }
+  const verifyMfa = async (mfaToken: string, code: string) => {
+    const previousToken = sessionStorage.getItem('sgbm_token')
+    sessionStorage.setItem('sgbm_token', mfaToken)
+    try {
+      const result = await api<{ access_token: string; user: SessionUser }>('/api/v1/auth/mfa/verify', {
+        method: 'POST', body: JSON.stringify({ code }),
+      })
+      sessionStorage.setItem('sgbm_token', result.access_token)
+      setUser(result.user)
+    } catch (e) {
+      if (previousToken) sessionStorage.setItem('sgbm_token', previousToken)
+      else sessionStorage.removeItem('sgbm_token')
+      throw e
+    }
   }
   const changePassword = async (currentPassword: string, newPassword: string) => {
     const result = await api<{ access_token: string; user: SessionUser }>('/api/v1/auth/change-password', {
@@ -43,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return false
     return user.permissions.includes(`${action}-${resource}:all`) || (!!ownerSlug && user.permissions.includes(`${action}-${resource}:${ownerSlug}`))
   }
-  return <AuthContext.Provider value={{ user, loading, login, changePassword, logout, can }}>{children}</AuthContext.Provider>
+  return <AuthContext.Provider value={{ user, loading, login, verifyMfa, changePassword, logout, can }}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {

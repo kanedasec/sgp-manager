@@ -27,16 +27,28 @@ user_group_memberships = Table(
 )
 
 
+class AuthProvider(str, enum.Enum):
+    LOCAL = "LOCAL"
+    OIDC = "OIDC"
+
+
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("oidc_subject", name="uq_users_oidc_subject"),)
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
+    password_hash: Mapped[str | None] = mapped_column(String(255))
     display_name: Mapped[str] = mapped_column(String(120))
     email: Mapped[str] = mapped_column(String(255), unique=True)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), default=UserRole.ADMIN)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    auth_provider: Mapped[AuthProvider] = mapped_column(
+        Enum(AuthProvider, name="auth_provider"), default=AuthProvider.LOCAL
+    )
+    oidc_subject: Mapped[str | None] = mapped_column(String(255), index=True)
+    mfa_secret_encrypted: Mapped[str | None] = mapped_column(Text)
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     groups: Mapped[list["AccessGroup"]] = relationship(
