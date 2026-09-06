@@ -1,6 +1,4 @@
-from collections import defaultdict, deque
 from datetime import UTC, datetime
-from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -9,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.dependencies import api_credential
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.rate_limit import hit_count
 from app.models import ApiCredential, Application, Gate, GatePolicy, GatePolicyGate
 from app.repositories.policies import effective_policy_scopes
 from app.schemas.evaluation import (
@@ -19,23 +18,13 @@ from app.services.gate_policies import normalize_stored_severities
 
 
 router = APIRouter(prefix="/policies", tags=["pipeline policy evaluation"])
-_hits: dict[str, deque[float]] = defaultdict(deque)
-_hits_lock = Lock()
 
 
 def enforce_rate_limit(request: Request) -> None:
-    import time
-
     limit = get_settings().evaluate_rate_limit_per_minute
     client = request.client.host if request.client else "unknown"
-    now = time.monotonic()
-    with _hits_lock:
-        bucket = _hits[client]
-        while bucket and bucket[0] < now - 60:
-            bucket.popleft()
-        if len(bucket) >= limit:
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Rate limit exceeded")
-        bucket.append(now)
+    if hit_count(client, limit) > limit:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Rate limit exceeded")
 
 
 @router.post(

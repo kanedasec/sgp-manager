@@ -262,7 +262,7 @@ For the same application and gate, non-revoked half-open time windows `[valid_fr
 - Owner checks are enforced by the backend on list, detail, create, update, and revoke operations; the portal's hidden controls are usability aids, not the authorization boundary.
 - Application containers run as non-root users. PostgreSQL is not published to the host, belongs only to an internal database network, and is unreachable directly from the frontend network.
 - `/metrics` is intentionally unauthenticated for scraping. Protect this route at an external ingress when port `3000` is reachable from an untrusted network.
-- The in-memory rate limiter is appropriate for basic MVP abuse control. Deployments requiring a global limit across replicas should use an ingress or shared Redis-backed limiter.
+- The pipeline evaluation rate limiter is Redis-backed and shared across all backend replicas (`REDIS_URL`, default `redis://redis:6379/0` in Compose); a Redis outage degrades to a per-process counter rather than blocking pipeline calls, since rate limiting is an anti-abuse control and not the authentication/authorization boundary.
 
 ## Development and tests
 

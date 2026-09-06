@@ -32,6 +32,17 @@ services:
     restart: unless-stopped
     networks: [database]
 
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks: [database]
+
   backend:
     build: ./backend
     environment:
@@ -49,6 +60,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       EXPIRING_SOON_DAYS: ${EXPIRING_SOON_DAYS:-7}
       EVALUATE_RATE_LIMIT_PER_MINUTE: ${EVALUATE_RATE_LIMIT_PER_MINUTE:-120}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-ChangeMeNow!2026}
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@example.com}
@@ -57,6 +69,8 @@ services:
       - runtime_secrets:/run/generated-secrets:ro
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     expose:
       - "8000"
