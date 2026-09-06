@@ -146,6 +146,17 @@ Local users, groups, owners, and machine credentials share the portal's **Access
 
 For enforcement, an unknown or inactive application receives unchanged gate defaults, which is fail-closed. An unknown requested gate returns `404`. Invalid authentication returns `401`; rate limiting returns `429`; generic errors return `500` with a request ID. Every non-success outcome must be interpreted by pipeline code as block/no authorization. The older `/evaluate` endpoint remains available to inspect active bypass entries directly.
 
+## Business observability and external audit sink
+
+`/metrics` also exposes domain-level Prometheus series beyond the existing HTTP transport counters:
+
+- `sgp_business_events_total{event_type}` — one increment per recorded audit event (e.g. `BYPASS_CREATED`, `BYPASS_REVOKED`), counted only after the owning transaction commits.
+- `sgp_enforcement_decisions_total{gate,outcome}` — every `evaluate-enforcement` call increments `blocked` or `passed` per gate, so blocking rate is directly observable.
+- `sgp_active_bypass_policies{owner_slug}`, `sgp_applications_total{active}`, `sgp_gates_total{owner_slug,active}` — current database state, queried once per scrape by a dedicated Prometheus collector rather than kept in sync on every write, so replicas can never disagree and a scrape failure never 500s `/metrics`.
+- `sgp_audit_webhook_deliveries_total{result}` — external audit sink delivery outcomes, see below.
+
+`audit_logs` in PostgreSQL remains the durable source of truth and is never bypassed. When `AUDIT_WEBHOOK_URL` is configured, every audit event is additionally forwarded as a signed (`X-SGP-Signature`, HMAC-SHA256 over the raw JSON body) HTTP POST for SIEM ingestion. Delivery is queued only from a SQLAlchemy `after_commit` hook — a rolled-back transaction (for example a later `IntegrityError` in the same request) never forwards or counts an event for state that was never actually persisted — and runs on a background thread pool so a slow or unreachable SIEM can never block, delay, or fail an administrative request. Failed deliveries retry with bounded exponential backoff (`AUDIT_WEBHOOK_MAX_RETRIES`, default 3) and are then dropped with a logged error; the event is never lost, only its external copy, since it remains permanently available in `audit_logs`. Without `AUDIT_WEBHOOK_URL` configured, this module is inert.
+
 ## Security and operations
 
 - Restrictive CORS, CSP and browser security headers are configured.

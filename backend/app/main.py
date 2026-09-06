@@ -8,12 +8,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import JSONResponse, Response
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, Counter, Histogram, generate_latest
 
 from app.api import access, admin, auth, evaluation, health
 from app.api.dependencies import docs_user
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.metrics import BusinessStateCollector
 from app.services.bootstrap import bootstrap_admin
 
 
@@ -21,6 +22,7 @@ configure_logging()
 logger = logging.getLogger("http")
 REQUESTS = Counter("sgbm_http_requests_total", "HTTP requests", ["method", "path", "status"])
 DURATION = Histogram("sgbm_http_request_duration_seconds", "HTTP request duration", ["method", "path"])
+REGISTRY.register(BusinessStateCollector())
 
 
 @asynccontextmanager
