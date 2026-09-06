@@ -9,9 +9,17 @@ from app.models import AccessGroup, GroupPermission, OwnerLabel, User
 from app.models.entities import UserRole
 
 
+# Single source of truth for the permission vocabulary. Every place that
+# used to hardcode this pair independently (the validation regex here, and
+# the frontend's permission-matrix table) now derives from these two
+# tuples, so adding a resource or action is a one-line change instead of a
+# multi-file, easy-to-miss edit.
 ACTIONS = ("view", "create", "edit")
 RESOURCES = ("gates", "policies")
-ROLE_PATTERN = re.compile(r"^(view|create|edit)-(gates|policies):([a-z0-9]+(?:-[a-z0-9]+)*|all)$")
+_OWNER_SLUG_PATTERN = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+ROLE_PATTERN = re.compile(
+    rf"^({'|'.join(ACTIONS)})-({'|'.join(RESOURCES)}):({_OWNER_SLUG_PATTERN}|all)$"
+)
 
 
 def is_admin(user: User) -> bool:

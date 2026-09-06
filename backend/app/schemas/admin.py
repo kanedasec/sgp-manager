@@ -460,3 +460,11 @@ class AccessGroupResponse(BaseModel):
 
 class AvailableRolesResponse(BaseModel):
     roles: list[str]
+    actions: list[str] = Field(
+        default_factory=list,
+        description="Ordered action vocabulary (e.g. view, create, edit) used to build 'roles'.",
+    )
+    resources: list[str] = Field(
+        default_factory=list,
+        description="Ordered resource vocabulary (e.g. gates, policies) used to build 'roles'.",
+    )

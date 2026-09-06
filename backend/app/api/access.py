@@ -12,7 +12,7 @@ from app.schemas.admin import (
     AccessGroupCreate, AccessGroupResponse, AccessGroupUpdate, AvailableRolesResponse, OwnerCreate, OwnerResponse,
     OwnerUpdate,
 )
-from app.services.access import available_roles, permission_name, replace_group_permissions
+from app.services.access import ACTIONS, RESOURCES, available_roles, permission_name, replace_group_permissions
 from app.services.audit import record_audit
 
 
@@ -83,7 +83,7 @@ def update_owner(
 
 @router.get("/roles", response_model=AvailableRolesResponse)
 def list_available_roles(db: Session = Depends(get_db)):
-    return AvailableRolesResponse(roles=available_roles(db))
+    return AvailableRolesResponse(roles=available_roles(db), actions=list(ACTIONS), resources=list(RESOURCES))
 
 
 @router.get("/groups", response_model=list[AccessGroupResponse])

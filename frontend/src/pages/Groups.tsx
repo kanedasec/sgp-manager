@@ -2,19 +2,25 @@ import { Edit3, Plus, Power, UsersRound } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { api } from '../api'
 import { Alert, Badge, Empty, Modal, Spinner } from '../components/ui'
-import type { AccessGroup, Owner } from '../types'
-
-const actions = ['view', 'create', 'edit'] as const
-const resources = ['gates', 'policies'] as const
+import type { AccessGroup, AvailableRoles, Owner } from '../types'
 
 export default function Groups() {
   const [groups, setGroups] = useState<AccessGroup[]>([])
   const [owners, setOwners] = useState<Owner[]>([])
+  // Loaded from the backend (app.services.access.ACTIONS/RESOURCES) instead of
+  // being hardcoded here, so a new resource/action shows up in the role
+  // matrix without a frontend change.
+  const [vocabulary, setVocabulary] = useState<AvailableRoles>({ roles: [], actions: [], resources: [] })
   const [editing, setEditing] = useState<Partial<AccessGroup> | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const load = () => Promise.all([api<AccessGroup[]>('/api/v1/admin/groups'), api<Owner[]>('/api/v1/admin/owners')]).then(([g, o]) => { setGroups(g); setOwners(o) }).finally(() => setLoading(false))
+  const load = () => Promise.all([
+    api<AccessGroup[]>('/api/v1/admin/groups'), api<Owner[]>('/api/v1/admin/owners'),
+    api<AvailableRoles>('/api/v1/admin/roles'),
+  ]).then(([g, o, r]) => { setGroups(g); setOwners(o); setVocabulary(r) }).finally(() => setLoading(false))
   useEffect(() => { void load() }, [])
+  const actions = vocabulary.actions
+  const resources = vocabulary.resources
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError('')
     const form = new FormData(event.currentTarget)
