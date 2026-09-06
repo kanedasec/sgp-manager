@@ -34,6 +34,23 @@ def create_access_token(user_id: UUID, role: str) -> tuple[str, datetime]:
     return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm=settings.jwt_algorithm), expires
 
 
+def create_mfa_pending_token(user_id: UUID) -> tuple[str, datetime]:
+    """A short-lived, narrowly scoped token issued after a correct
+    username/password but before a required TOTP code is verified. Its
+    ``type`` ("mfa_pending") is distinct from a full "admin" access token so
+    it is rejected by every dependency that requires a full session,
+    mirroring how the password-change flow uses a full token but restricts
+    routes by a `must_change_password` flag rather than a token type — MFA
+    uses a token-type split instead because the pending state must not be
+    able to call *any* authenticated endpoint, including /auth/me."""
+    settings = get_settings()
+    if settings.jwt_secret is None:  # Configuration validation normally makes this unreachable.
+        raise RuntimeError("JWT secret is not configured")
+    expires = datetime.now(UTC) + timedelta(minutes=5)
+    payload = {"sub": str(user_id), "exp": expires, "iat": datetime.now(UTC), "type": "mfa_pending"}
+    return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm=settings.jwt_algorithm), expires
+
+
 def decode_access_token(token: str) -> dict:
     settings = get_settings()
     if settings.jwt_secret is None:  # Configuration validation normally makes this unreachable.

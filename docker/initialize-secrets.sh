@@ -27,5 +27,6 @@ ensure_secret() {
 ensure_secret postgres_password "${POSTGRES_PASSWORD_OVERRIDE:-}" 36
 ensure_secret jwt_secret "${JWT_SECRET_OVERRIDE:-}" 48
 ensure_secret api_key_pepper "${API_KEY_PEPPER_OVERRIDE:-}" 48
+ensure_secret mfa_secret_key "${MFA_SECRET_KEY_OVERRIDE:-}" 32
 
 echo "Runtime secrets are initialized. Secret values were not logged."

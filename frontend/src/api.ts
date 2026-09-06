@@ -10,7 +10,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     ...options,
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers },
   })
-  if (response.status === 401 && path !== '/api/v1/auth/login') {
+  if (response.status === 401 && !['/api/v1/auth/login', '/api/v1/auth/mfa/verify'].includes(path)) {
     sessionStorage.removeItem('sgbm_token')
     window.dispatchEvent(new Event('sgbm-unauthorized'))
   }

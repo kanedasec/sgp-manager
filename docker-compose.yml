@@ -63,6 +63,14 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       AUDIT_WEBHOOK_URL: ${AUDIT_WEBHOOK_URL:-}
       AUDIT_WEBHOOK_SECRET: ${AUDIT_WEBHOOK_SECRET:-}
+      MFA_SECRET_KEY_FILE: /run/generated-secrets/mfa_secret_key
+      MFA_REQUIRED_FOR_ADMINS: ${MFA_REQUIRED_FOR_ADMINS:-false}
+      OIDC_ENABLED: ${OIDC_ENABLED:-false}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      OIDC_ADMIN_GROUPS: ${OIDC_ADMIN_GROUPS:-}
       INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-ChangeMeNow!2026}
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@example.com}
@@ -97,6 +105,27 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+    networks: [application]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    profiles: ["dev-oidc"]
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./docker/keycloak/sgp-manager-realm.json:/opt/keycloak/data/import/sgp-manager-realm.json:ro
+    ports:
+      - "${KEYCLOAK_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q 'UP' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
     networks: [application]
 

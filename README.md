@@ -84,6 +84,27 @@ The reset command is irreversible unless the named volumes were backed up.
 
 An installation that already has `postgres_data` should perform the first upgraded start with its existing `POSTGRES_PASSWORD`, `JWT_SECRET`, and `API_KEY_PEPPER` environment values still available. `secrets-init` copies them into `runtime_secrets` exactly once. After that successful start and login verification, the old `.env` file can be removed; normal restarts use the persisted files.
 
+## Federated login (OIDC) and admin MFA
+
+Local username/password login always remains available. Optional OIDC federation and administrator TOTP MFA can be layered on top without replacing it:
+
+```bash
+# OIDC (any spec-compliant IdP: Keycloak, Okta, Entra ID, Auth0)
+OIDC_ENABLED=true
+OIDC_ISSUER=https://idp.example.com/realms/sgp-manager
+OIDC_CLIENT_ID=sgp-manager
+OIDC_CLIENT_SECRET=...
+OIDC_REDIRECT_URI=http://localhost:3000/oidc/callback
+OIDC_ADMIN_GROUPS=sgp-admins   # IdP group claim values that map to the ADMIN role
+
+# Administrator MFA
+MFA_REQUIRED_FOR_ADMINS=true   # blocks ADMIN accounts from the portal until they enroll
+```
+
+A local Keycloak instance for development is available via `docker compose --profile dev-oidc up` (realm import at `docker/keycloak/sgp-manager-realm.json`, admin console on `http://localhost:8081`, dev users `dev-admin`/`DevAdminPass!123` and `dev-user`/`DevUserPass!123`).
+
+Every administrator, local or federated, can enroll TOTP MFA (`POST /api/v1/auth/mfa/enroll` then `/mfa/enable`) independent of `MFA_REQUIRED_FOR_ADMINS`. A login with MFA enabled returns a short-lived MFA challenge token instead of a session; that token cannot access any other endpoint until `POST /api/v1/auth/mfa/verify` succeeds.
+
 ## Initial administrator
 
 When no user exists and no overrides are provided, the bootstrap login is:

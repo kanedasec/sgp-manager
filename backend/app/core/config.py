@@ -34,6 +34,18 @@ class Settings(BaseSettings):
     audit_webhook_timeout_seconds: float = 5.0
     audit_webhook_max_retries: int = 3
     audit_webhook_deliver_synchronously: bool = False
+    mfa_secret_key: SecretStr | None = None
+    mfa_secret_key_file: str | None = None
+    mfa_issuer: str = "SGP Manager"
+    mfa_required_for_admins: bool = False
+    oidc_enabled: bool = False
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: SecretStr | None = None
+    oidc_redirect_uri: str | None = None
+    oidc_group_claim: str = "groups"
+    oidc_admin_groups: str = ""
+    oidc_jwks_cache_seconds: int = 3600
     initial_admin_username: str | None = Field(default=None, min_length=2, max_length=64)
     initial_admin_password: SecretStr | None = None
     initial_admin_email: EmailStr | None = None
@@ -65,6 +77,14 @@ class Settings(BaseSettings):
             raise ValueError("JWT secret and API key pepper must be provided directly or through secret files")
         self.reject_insecure_secret(self.jwt_secret)
         self.reject_insecure_secret(self.api_key_pepper)
+        if self.mfa_secret_key is None and self.mfa_secret_key_file:
+            self.mfa_secret_key = self.read_secret_file(self.mfa_secret_key_file, "MFA secret key")
+        if self.mfa_secret_key is not None:
+            self.reject_insecure_secret(self.mfa_secret_key)
+        if self.oidc_enabled and not all((self.oidc_issuer, self.oidc_client_id, self.oidc_client_secret, self.oidc_redirect_uri)):
+            raise ValueError(
+                "oidc_issuer, oidc_client_id, oidc_client_secret, and oidc_redirect_uri are required when OIDC is enabled"
+            )
         if not self.database_url:
             password = self.postgres_password or self.read_secret_file(
                 self.postgres_password_file, "PostgreSQL password"
@@ -106,6 +126,10 @@ class Settings(BaseSettings):
     @property
     def allowed_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def oidc_admin_group_slugs(self) -> set[str]:
+        return {slug.strip().lower() for slug in self.oidc_admin_groups.split(",") if slug.strip()}
 
 
 @lru_cache
