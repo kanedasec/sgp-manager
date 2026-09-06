@@ -12,4 +12,4 @@ prometheus-client==0.22.1
 redis==5.2.1
 httpx==0.28.1
 pyotp==2.9.0
-cryptography==44.0.1
+cryptography==50.0.1
