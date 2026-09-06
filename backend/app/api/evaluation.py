@@ -46,7 +46,10 @@ def evaluate(
         return EvaluationResponse(application=data.application, generated_at=now, policies=[])
     scopes = effective_policy_scopes(db, application.id, now, data.gate)
     result = [
-        EvaluatedPolicy(gate=scope.gate.slug, bypass_severities=scope.severities, expires_at=scope.expires_at)
+        EvaluatedPolicy(
+            gate=scope.gate.slug, bypass_severities=scope.severities,
+            finding_scope=scope.finding_scope or None, expires_at=scope.expires_at,
+        )
         for scope in scopes
     ]
     return EvaluationResponse(application=application.slug, generated_at=now, policies=result)
@@ -126,7 +129,23 @@ def evaluate_enforcement(
         .selectinload(GatePolicyGate.gate)
     ).where(Application.slug == data.application, Application.active.is_(True)))
     scopes = effective_policy_scopes(db, application.id, now, data.gate) if application else []
-    bypasses = {scope.gate_id: set(scope.severities) for scope in scopes}
+    # Unscoped bypasses (finding_scope empty/None) remove the whole severity, matching
+    # the original coarse behavior. Finding-scoped bypasses never remove a severity:
+    # the pipeline cannot prove every finding at that severity is covered, only that
+    # the specific listed finding IDs are, so those IDs are surfaced separately in
+    # bypassed_findings while blocking_severities keeps blocking everything else.
+    unscoped_bypasses: dict[object, set[str]] = {}
+    scoped_findings: dict[object, list[tuple[set[str], set[str]]]] = {}
+    for scope in scopes:
+        if scope.finding_scope:
+            # A finding-scoped bypass still only applies within its own selected
+            # severities; a finding listed under a "high" bypass does not silently
+            # cover the same finding at "critical".
+            scoped_findings.setdefault(scope.gate_id, []).append(
+                (set(scope.severities), set(scope.finding_scope))
+            )
+        else:
+            unscoped_bypasses.setdefault(scope.gate_id, set()).update(scope.severities)
     canonical = ["low", "medium", "high", "critical"]
     result: list[EvaluatedGateEnforcement] = []
     if application:
@@ -160,9 +179,15 @@ def evaluate_enforcement(
         ]
     for gate, configured in configured_gates:
         defaults = set(configured)
-        bypassed = bypasses.get(gate.id, set())
+        unscoped = unscoped_bypasses.get(gate.id, set())
+        blocking = [severity for severity in canonical if severity in defaults and severity not in unscoped]
+        bypassed_findings: set[str] = set()
+        for scoped_severities, finding_ids in scoped_findings.get(gate.id, []):
+            if scoped_severities & set(blocking):
+                bypassed_findings.update(finding_ids)
         result.append(EvaluatedGateEnforcement(
             gate=gate.slug,
-            blocking_severities=[severity for severity in canonical if severity in defaults and severity not in bypassed],
+            blocking_severities=blocking,
+            bypassed_findings=sorted(bypassed_findings),
         ))
     return EnforcementEvaluationResponse(application=data.application, generated_at=now, gates=result)

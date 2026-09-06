@@ -15,7 +15,7 @@ def test_defaults_are_blocking_without_bypass(client, domain, api_key):
     response = enforce(client, key)
     assert response.status_code == 200
     assert response.json()["gates"] == [{
-        "gate": "secrets", "blocking_severities": ["low", "medium", "high", "critical"],
+        "gate": "secrets", "blocking_severities": ["low", "medium", "high", "critical"], "bypassed_findings": [],
     }]
 
 
@@ -35,7 +35,7 @@ def test_active_bypass_is_subtracted_from_blocking_defaults(client, admin_header
         domain, gates=[{"gate_id": gate["id"], "severities": ["medium", "high"]}],
     ))
     assert enforce(client, key).json()["gates"] == [{
-        "gate": "secrets", "blocking_severities": ["critical"],
+        "gate": "secrets", "blocking_severities": ["critical"], "bypassed_findings": [],
     }]
 
 
@@ -76,7 +76,7 @@ def test_optional_gate_filter_and_unknown_gate(client, admin_headers, domain, ap
     )
     assert policy.status_code == 200
     filtered = enforce(client, key, gate="sast")
-    assert filtered.json()["gates"] == [{"gate": "sast", "blocking_severities": ["high", "critical"]}]
+    assert filtered.json()["gates"] == [{"gate": "sast", "blocking_severities": ["high", "critical"], "bypassed_findings": []}]
     assert enforce(client, key, gate="does-not-exist").status_code == 404
 
 

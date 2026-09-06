@@ -379,7 +379,10 @@ def update_policy(policy_id: UUID, data: PolicyUpdate, request: Request, db: Ses
     if policy.revoked_at:
         raise HTTPException(409, "Revoked policies cannot be edited")
     previous_scopes = [
-        {"gate_id": str(scope.gate_id), "severities": list(scope.severities)} for scope in policy.gate_scopes
+        {
+            "gate_id": str(scope.gate_id), "severities": list(scope.severities),
+            "finding_scope": scope.finding_scope or None,
+        } for scope in policy.gate_scopes
     ]
     previous_window = {"valid_from": policy.valid_from.isoformat(), "expires_at": policy.expires_at.isoformat()}
     changes = data.model_dump(exclude_unset=True)
@@ -396,7 +399,10 @@ def update_policy(policy_id: UUID, data: PolicyUpdate, request: Request, db: Ses
     requested_gates = data.gates if "gates" in changes else None
     if requested_gates is None:
         from app.schemas.admin import PolicyGateInput
-        requested_gates = [PolicyGateInput(gate_id=scope.gate_id, severities=scope.severities) for scope in policy.gate_scopes]
+        requested_gates = [
+            PolicyGateInput(gate_id=scope.gate_id, severities=scope.severities, finding_scope=scope.finding_scope)
+            for scope in policy.gate_scopes
+        ]
     validate_gates(
         db, policy.application_id, target_owner_id, requested_gates, new_start, new_expiry, policy.id
     )
@@ -409,7 +415,10 @@ def update_policy(policy_id: UUID, data: PolicyUpdate, request: Request, db: Ses
         "fields": list(changes),
         "previous_gate_policies": previous_scopes,
         "gate_policies": [
-            {"gate_id": str(item.gate_id), "severities": [severity.value for severity in item.severities]}
+            {
+                "gate_id": str(item.gate_id), "severities": [severity.value for severity in item.severities],
+                "finding_scope": item.finding_scope or None,
+            }
             for item in requested_gates
         ],
         "previous_window": previous_window,
