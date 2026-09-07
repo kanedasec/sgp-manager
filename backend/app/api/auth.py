@@ -12,9 +12,11 @@ from app.api.dependencies import authenticated_user, current_user, mfa_pending_u
 from app.core.database import get_db
 from app.core.config import get_settings
 from app.core.mfa import (
-    decrypt_totp_secret, encrypt_totp_secret, generate_totp_secret, provisioning_uri, verify_totp_code,
+    MfaNotConfiguredError, decrypt_totp_secret, encrypt_totp_secret, generate_totp_secret, provisioning_uri,
+    verify_totp_code,
 )
 from app.core.oidc import OidcConfigurationError, OidcExchangeError, authorization_url, exchange_code_for_identity
+from app.core.rate_limit import hit_count
 from app.core.security import create_access_token, create_mfa_pending_token, decode_access_token, hash_password, verify_password
 from app.core.token_revocation import revoke_token
 from app.models import User
@@ -52,6 +54,17 @@ def user_response(user: User) -> UserResponse:
     )
 
 
+def enforce_auth_rate_limit(client: str, limit: int) -> None:
+    """Throttles repeated authentication attempts (wrong password or wrong
+    TOTP code) per client key. Unlike the pipeline evaluation limiter this
+    guards an authentication boundary, so the failure mode differs: on a
+    Redis outage `hit_count` already falls back to a per-process counter
+    rather than raising, so this still degrades to a (weaker but non-zero)
+    per-replica limit instead of going fully open."""
+    if hit_count(client, limit) > limit:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts. Try again later.")
+
+
 def set_documentation_cookie(response: Response, token: str) -> None:
     settings = get_settings()
     response.set_cookie(
@@ -83,6 +96,16 @@ def issue_session(db: Session, user: User, response: Response, request: Request,
 
 @router.post("/login", response_model=LoginResponse | MfaChallengeResponse)
 def login(data: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+    settings = get_settings()
+    limit = settings.auth_login_rate_limit_per_minute
+    ip = source_ip(request) or "unknown"
+    username_key = data.username.strip().lower()[:64]
+    # Two independent counters: one per source IP (stops a single attacker
+    # from spraying many usernames) and one per attempted username (stops a
+    # distributed attacker credential-stuffing a single account from many
+    # IPs). Either being over limit blocks the attempt.
+    enforce_auth_rate_limit(f"login:ip:{ip}", limit)
+    enforce_auth_rate_limit(f"login:user:{username_key}", limit)
     user = db.scalar(select(User).where(User.username == data.username.strip()))
     if (
         not user or not user.active or user.auth_provider != AuthProvider.LOCAL
@@ -104,7 +127,23 @@ def verify_mfa(
     data: MfaVerifyRequest, request: Request, response: Response, db: Session = Depends(get_db),
     user: User = Depends(mfa_pending_user),
 ):
-    if not user.mfa_enabled or not user.mfa_secret_encrypted or not verify_totp_code(user.mfa_secret_encrypted, data.code):
+    settings = get_settings()
+    limit = settings.auth_mfa_verify_rate_limit_per_minute
+    ip = source_ip(request) or "unknown"
+    # Same dual-counter shape as /auth/login: a fixed 6-digit TOTP code has
+    # only ~1e6 possibilities, so this endpoint needs its own throttle even
+    # though it is only reachable with a valid short-lived mfa_pending token
+    # from a correct password.
+    enforce_auth_rate_limit(f"mfa-verify:ip:{ip}", limit)
+    enforce_auth_rate_limit(f"mfa-verify:user:{user.id}", limit)
+    try:
+        code_is_valid = (
+            user.mfa_enabled and user.mfa_secret_encrypted
+            and verify_totp_code(user.mfa_secret_encrypted, data.code)
+        )
+    except MfaNotConfiguredError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Multi-factor authentication is not available") from None
+    if not code_is_valid:
         record_audit(db, "LOGIN_MFA_FAILED", "USER", user.id, "USER", user.id, source_ip=source_ip(request))
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired MFA code")
@@ -183,7 +222,11 @@ def enroll_mfa(request: Request, db: Session = Depends(get_db), user: User = Dep
     if user.mfa_enabled:
         raise HTTPException(status.HTTP_409_CONFLICT, "Multi-factor authentication is already enabled")
     secret = generate_totp_secret()
-    user.mfa_secret_encrypted = encrypt_totp_secret(secret)
+    try:
+        encrypted_secret = encrypt_totp_secret(secret)
+    except MfaNotConfiguredError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Multi-factor authentication is not available") from None
+    user.mfa_secret_encrypted = encrypted_secret
     record_audit(db, "MFA_ENROLLMENT_STARTED", "USER", user.id, "USER", user.id, source_ip=source_ip(request))
     db.commit()
     return MfaEnrollResponse(provisioning_uri=provisioning_uri(secret, user.username), secret=secret)
@@ -198,7 +241,11 @@ def enable_mfa(
         raise HTTPException(status.HTTP_409_CONFLICT, "Multi-factor authentication is already enabled")
     if not user.mfa_secret_encrypted:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Call /auth/mfa/enroll before enabling MFA")
-    if not verify_totp_code(user.mfa_secret_encrypted, data.code):
+    try:
+        code_is_valid = verify_totp_code(user.mfa_secret_encrypted, data.code)
+    except MfaNotConfiguredError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Multi-factor authentication is not available") from None
+    if not code_is_valid:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid verification code")
     user.mfa_enabled = True
     record_audit(db, "MFA_ENABLED", "USER", user.id, "USER", user.id, source_ip=source_ip(request))
