@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Table, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -271,3 +271,20 @@ class AuditLog(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     event_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     source_ip: Mapped[str | None] = mapped_column(String(64))
+    # Append-only tamper-evidence chain (see app.services.audit_chain): each row's
+    # entry_hash commits to its own fields plus the immediately preceding row's
+    # entry_hash, so silently editing or deleting a historical row breaks the
+    # hash of every row chained after it. sequence is a strictly monotonic,
+    # database-assigned ordering key independent of `timestamp` (which is
+    # client/application-clock and not safe to rely on for chain ordering).
+    # Both columns are nullable because rows written before this feature
+    # shipped have no hash to verify against; the chain is only guaranteed
+    # unbroken from the first hashed row onward.
+    # Assigned by application code (see app.services.audit_chain), not the
+    # database, because the chain must serialize on "read the previous
+    # hash, then write the next row referencing it" as one logical step --
+    # a plain DB autoincrement sequence number would not let us compute
+    # prev_hash atomically alongside it.
+    sequence: Mapped[int | None] = mapped_column(BigInteger, unique=True, nullable=True)
+    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    entry_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

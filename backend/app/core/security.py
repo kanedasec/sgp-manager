@@ -30,7 +30,14 @@ def create_access_token(user_id: UUID, role: str) -> tuple[str, datetime]:
     if settings.jwt_secret is None:  # Configuration validation normally makes this unreachable.
         raise RuntimeError("JWT secret is not configured")
     expires = datetime.now(UTC) + timedelta(minutes=settings.jwt_expire_minutes)
-    payload = {"sub": str(user_id), "role": role, "exp": expires, "iat": datetime.now(UTC), "type": "admin"}
+    # jti enables single-token revocation on logout (see app.core.token_revocation);
+    # iat (as a numeric timestamp, not just a JWT-library-parsed datetime) lets a
+    # whole-user force-logout invalidate every token issued before a given instant
+    # without needing to enumerate individual jtis.
+    payload = {
+        "sub": str(user_id), "role": role, "exp": expires, "iat": datetime.now(UTC), "type": "admin",
+        "jti": secrets.token_urlsafe(16),
+    }
     return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm=settings.jwt_algorithm), expires
 
 

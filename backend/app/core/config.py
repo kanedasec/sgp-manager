@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     expiring_soon_days: int = 7
     evaluate_rate_limit_per_minute: int = 120
+    auth_login_rate_limit_per_minute: int = 10
+    auth_mfa_verify_rate_limit_per_minute: int = 10
     redis_url: str | None = None
     rate_limit_redis_timeout_seconds: float = 0.2
     audit_webhook_url: str | None = None
