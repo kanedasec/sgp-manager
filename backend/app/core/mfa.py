@@ -21,10 +21,23 @@ from cryptography.fernet import Fernet, InvalidToken
 from app.core.config import get_settings
 
 
+class MfaNotConfiguredError(RuntimeError):
+    """Raised when MFA_SECRET_KEY is not provisioned on this deployment.
+
+    Every caller of _fernet() (enroll/enable/verify/disable) must catch
+    this and turn it into a clean 503, matching the fail-closed
+    convention used by /policies/resolve-pipeline and
+    /policies/evaluate-enforcement for an invalid/unconfigured gate
+    policy: a missing prerequisite must degrade to "the feature is
+    unavailable", never crash into a 500 that also leaves MFA silently
+    non-functional despite appearing enabled in the UI/API contract.
+    """
+
+
 def _fernet() -> Fernet:
     settings = get_settings()
     if settings.mfa_secret_key is None:
-        raise RuntimeError("MFA secret key is not configured")
+        raise MfaNotConfiguredError("MFA secret key is not configured")
     # Fernet requires a 32-byte urlsafe-base64 key; derive one deterministically
     # from the configured secret so operators supply an ordinary long random
     # string (matching JWT_SECRET/API_KEY_PEPPER conventions) rather than a

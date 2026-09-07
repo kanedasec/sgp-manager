@@ -9,7 +9,8 @@ from app.api.dependencies import authenticated_user, current_user, mfa_pending_u
 from app.core.database import get_db
 from app.core.config import get_settings
 from app.core.mfa import (
-    decrypt_totp_secret, encrypt_totp_secret, generate_totp_secret, provisioning_uri, verify_totp_code,
+    MfaNotConfiguredError, decrypt_totp_secret, encrypt_totp_secret, generate_totp_secret, provisioning_uri,
+    verify_totp_code,
 )
 from app.core.oidc import OidcConfigurationError, OidcExchangeError, authorization_url, exchange_code_for_identity
 from app.core.security import create_access_token, create_mfa_pending_token, hash_password, verify_password
@@ -97,7 +98,14 @@ def verify_mfa(
     data: MfaVerifyRequest, request: Request, response: Response, db: Session = Depends(get_db),
     user: User = Depends(mfa_pending_user),
 ):
-    if not user.mfa_enabled or not user.mfa_secret_encrypted or not verify_totp_code(user.mfa_secret_encrypted, data.code):
+    try:
+        code_is_valid = (
+            user.mfa_enabled and user.mfa_secret_encrypted
+            and verify_totp_code(user.mfa_secret_encrypted, data.code)
+        )
+    except MfaNotConfiguredError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Multi-factor authentication is not available") from None
+    if not code_is_valid:
         record_audit(db, "LOGIN_MFA_FAILED", "USER", user.id, "USER", user.id, source_ip=source_ip(request))
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired MFA code")
@@ -161,7 +169,11 @@ def enroll_mfa(request: Request, db: Session = Depends(get_db), user: User = Dep
     if user.mfa_enabled:
         raise HTTPException(status.HTTP_409_CONFLICT, "Multi-factor authentication is already enabled")
     secret = generate_totp_secret()
-    user.mfa_secret_encrypted = encrypt_totp_secret(secret)
+    try:
+        encrypted_secret = encrypt_totp_secret(secret)
+    except MfaNotConfiguredError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Multi-factor authentication is not available") from None
+    user.mfa_secret_encrypted = encrypted_secret
     record_audit(db, "MFA_ENROLLMENT_STARTED", "USER", user.id, "USER", user.id, source_ip=source_ip(request))
     db.commit()
     return MfaEnrollResponse(provisioning_uri=provisioning_uri(secret, user.username), secret=secret)
@@ -176,7 +188,11 @@ def enable_mfa(
         raise HTTPException(status.HTTP_409_CONFLICT, "Multi-factor authentication is already enabled")
     if not user.mfa_secret_encrypted:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Call /auth/mfa/enroll before enabling MFA")
-    if not verify_totp_code(user.mfa_secret_encrypted, data.code):
+    try:
+        code_is_valid = verify_totp_code(user.mfa_secret_encrypted, data.code)
+    except MfaNotConfiguredError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Multi-factor authentication is not available") from None
+    if not code_is_valid:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid verification code")
     user.mfa_enabled = True
     record_audit(db, "MFA_ENABLED", "USER", user.id, "USER", user.id, source_ip=source_ip(request))
