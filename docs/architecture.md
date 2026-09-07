@@ -171,7 +171,8 @@ For enforcement, an unknown or inactive application receives unchanged gate defa
 
 ## Security and operations
 
-- Restrictive CORS, CSP and browser security headers are configured.
+- Restrictive CORS, CSP and browser security headers are configured. The CSP is scoped: only `/docs`, `/redoc`, and `/openapi.json` receive the permissive policy the Swagger/ReDoc CDN assets need (`unsafe-inline`, `cdn.jsdelivr.net`); every other response, including all `/api/v1/*` JSON, gets a fully locked-down `script-src 'none'; style-src 'none'` policy that needs no CDN allowance.
+- The backend only trusts `X-Forwarded-For`/`X-Forwarded-Proto` from private/internal address ranges (`--forwarded-allow-ips`, not `*`), and the reference `frontend/nginx.conf` overwrites `X-Forwarded-For` with `$remote_addr` rather than appending to a client-supplied value, so a request cannot poison the source IP recorded in audit logs or used as a rate-limit key. Production is fronted by an external edge (documented separately) that performs the same override before the backend ever sees the header.
 - Request logs are JSON with correlation ID, route, status, and duration; request bodies and credentials are never logged.
 - `/health` checks process liveness and `/ready` executes `SELECT 1`.
 - Prometheus metrics report request counts and durations at `/metrics`.

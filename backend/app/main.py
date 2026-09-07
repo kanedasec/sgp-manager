@@ -56,6 +56,28 @@ async def safe_validation_error(_: Request, exc: RequestValidationError):
     return JSONResponse(status_code=422, content={"detail": details})
 
 
+# The Swagger/ReDoc UI pages load CDN-hosted JS/CSS and use inline
+# style/script, so they need a permissive CSP. Every other response
+# (including all /api/v1/* JSON) needs no script/style/CDN allowance at
+# all and previously received this same permissive policy purely because
+# the header was set unconditionally for every response -- an
+# unnecessarily wide CSP on JSON API responses that happened to be
+# mitigated in practice only because the deployed edge (Caddy in
+# production; the checked-in nginx.conf reference config similarly) sets
+# its own stricter CSP and hides this one for non-doc paths. Narrowing it
+# here removes the dependency on the edge doing that correctly.
+_DOCS_CSP = (
+    "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'unsafe-inline' https://cdn.jsdelivr.net; img-src data: https://fastapi.tiangolo.com; "
+    "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+)
+_DEFAULT_CSP = (
+    "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; "
+    "connect-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+)
+_DOCS_PATHS = {"/docs", "/redoc", "/openapi.json"}
+
+
 @app.middleware("http")
 async def security_and_observability(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", "")
@@ -77,7 +99,7 @@ async def security_and_observability(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    response.headers["Content-Security-Policy"] = "default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://cdn.jsdelivr.net; img-src data: https://fastapi.tiangolo.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+    response.headers["Content-Security-Policy"] = _DOCS_CSP if request.url.path in _DOCS_PATHS else _DEFAULT_CSP
     response.headers["Cache-Control"] = "no-store"
     logger.info(
         "request completed",
