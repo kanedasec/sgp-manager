@@ -303,6 +303,7 @@ For the same application and gate, non-revoked half-open time windows `[valid_fr
 - `/metrics` includes business-domain series (active bypasses per owner, enforcement block/pass counts per gate, audit event counts, audit webhook delivery outcomes) in addition to HTTP transport counters.
 - An optional `AUDIT_WEBHOOK_URL` forwards every audit event as a signed (HMAC-SHA256, `X-SGP-Signature` header) HTTP POST to an external SIEM, delivered asynchronously after the owning transaction commits so a SIEM outage never blocks an administrative request. `audit_logs` in PostgreSQL remains the durable source of truth regardless of webhook delivery outcome.
 - The pipeline evaluation rate limiter is Redis-backed and shared across all backend replicas (`REDIS_URL`, default `redis://redis:6379/0` in Compose); a Redis outage degrades to a per-process counter rather than blocking pipeline calls, since rate limiting is an anti-abuse control and not the authentication/authorization boundary.
+- `/auth/login` and `/auth/mfa/verify` are throttled too (`AUTH_LOGIN_RATE_LIMIT_PER_MINUTE`, `AUTH_MFA_VERIFY_RATE_LIMIT_PER_MINUTE`, default 10/minute), keyed by both source IP and the targeted account, to stop scripted password/TOTP guessing even though Argon2id already raises the per-guess cost.
 
 ## Development and tests
 

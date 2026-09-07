@@ -12,10 +12,24 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.database import Base, SessionLocal, engine
+from app.core.rate_limit import reset_for_tests as reset_rate_limit_state
 from app.core.security import hash_password
 from app.main import app
 from app.models import User
 from app.models.entities import UserRole
+
+
+@pytest.fixture(autouse=True)
+def clean_rate_limit_state():
+    # Login/MFA-verify throttling (see app.api.auth) shares the same
+    # process-local counters as the pipeline rate limiter. Every test file
+    # that logs in via the admin_headers fixture would otherwise accumulate
+    # hits across the whole test session and eventually start returning 429
+    # for unrelated tests, so this resets the counters before and after
+    # every test regardless of which module it lives in.
+    reset_rate_limit_state()
+    yield
+    reset_rate_limit_state()
 
 
 @pytest.fixture(autouse=True)
