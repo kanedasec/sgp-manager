@@ -76,6 +76,3 @@ def hash_api_key(key: str) -> str:
         raise RuntimeError("API key pepper is not configured")
     return hmac.new(pepper.get_secret_value().encode(), key.encode(), hashlib.sha256).hexdigest()
 
-
-def secure_compare(left: str, right: str) -> bool:
-    return hmac.compare_digest(left, right)

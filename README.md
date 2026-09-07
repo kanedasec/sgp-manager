@@ -118,6 +118,8 @@ This credential is deliberately restricted to first-run enrollment. A successful
 
 Because the bootstrap credential is public knowledge, perform the first login before exposing the portal to an untrusted network. A server-specific initial value can be supplied without an `.env` file:
 
+> **Risk carries forward to every future fresh deployment.** `docker-compose.yml` falls back to the well-known `admin` / `ChangeMeNow!2026` pair whenever `INITIAL_ADMIN_PASSWORD` is not explicitly set -- there is no forced random generation on a fresh install. An already-running instance that has completed its first-login rotation is not affected (the default stops working immediately after replacement, as above), but the *same* known credential resurfaces on every subsequent fresh deploy or full reset (new volume, disaster recovery restore without `runtime_secrets`, a new environment) that does not explicitly set `INITIAL_ADMIN_PASSWORD`. Always set it explicitly for any deployment you do not control end-to-end, and treat "first login completed" as a per-deployment fact you must re-verify after any reset, not a one-time project-level guarantee.
+
 ```bash
 INITIAL_ADMIN_PASSWORD='a-server-specific-bootstrap-password' docker compose up -d --build
 ```
@@ -292,7 +294,7 @@ For the same application and gate, non-revoked half-open time windows `[valid_fr
 - Passwords use Argon2id and API keys use peppered HMAC-SHA-256 digests.
 - JWT and key-pepper secrets must contain at least 32 characters whether provided explicitly or loaded from the generated secret files.
 - PostgreSQL, JWT, and key-pepper secrets are generated from kernel randomness and stored in a Compose volume when explicit overrides are absent; they are not hardcoded in the image or repository.
-- The well-known bootstrap password cannot access domain APIs or documentation and must be replaced before portal enrollment completes.
+- The well-known bootstrap password cannot access domain APIs or documentation and must be replaced before portal enrollment completes. This is enforced per-deployment, not project-wide: a fresh install, volume reset, or disaster-recovery restore that omits `INITIAL_ADMIN_PASSWORD` falls back to the same publicly known default again (see [Initial administrator](#initial-administrator)) until that specific instance completes its own first-login rotation.
 - The pipeline endpoint exposes only gate, severities, and expiration; no justification or internal IDs.
 - Inputs are bounded and validated; SQLAlchemy emits parameterized statements.
 - Security headers, restrictive CORS, correlation IDs, JSON logs, generic 500 responses, and per-instance evaluation rate limiting are enabled.
