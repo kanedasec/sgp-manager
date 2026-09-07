@@ -1,6 +1,9 @@
 import secrets
+from datetime import UTC, datetime
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -12,7 +15,8 @@ from app.core.mfa import (
     decrypt_totp_secret, encrypt_totp_secret, generate_totp_secret, provisioning_uri, verify_totp_code,
 )
 from app.core.oidc import OidcConfigurationError, OidcExchangeError, authorization_url, exchange_code_for_identity
-from app.core.security import create_access_token, create_mfa_pending_token, hash_password, verify_password
+from app.core.security import create_access_token, create_mfa_pending_token, decode_access_token, hash_password, verify_password
+from app.core.token_revocation import revoke_token
 from app.models import User
 from app.models.entities import AuthProvider, UserRole
 from app.schemas.auth import (
@@ -22,6 +26,9 @@ from app.schemas.auth import (
 from app.services.audit import record_audit
 from app.services.access import effective_permissions
 from app.services.oidc_users import find_or_provision_user
+
+
+bearer_optional = HTTPBearer(auto_error=False)
 
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -139,8 +146,22 @@ def change_password(
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(response: Response):
+def logout(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_optional),
+):
     settings = get_settings()
+    if credentials and credentials.scheme.lower() == "bearer":
+        try:
+            payload = decode_access_token(credentials.credentials)
+            jti = payload.get("jti")
+            expires_at = payload.get("exp")
+        except jwt.PyJWTError:
+            jti = None
+            expires_at = None
+        if jti and expires_at:
+            ttl = int(expires_at - datetime.now(UTC).timestamp())
+            revoke_token(jti, ttl)
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
     response.delete_cookie(
         key=settings.admin_session_cookie_name,
         httponly=True,
@@ -148,6 +169,7 @@ def logout(response: Response):
         samesite="strict",
         path="/",
     )
+    return response
 
 
 @router.post("/mfa/enroll", response_model=MfaEnrollResponse)

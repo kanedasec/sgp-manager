@@ -10,6 +10,7 @@ from app.api.dependencies import admin_user, current_user, source_ip
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import generate_api_key, hash_api_key, hash_password
+from app.core.token_revocation import revoke_all_for_user
 from app.models import (
     AccessGroup, ApiCredential, Application, AuditLog, BypassPolicy, BypassPolicyGate, Gate, GatePolicy,
     GatePolicyGate, OwnerLabel, User,
@@ -563,6 +564,24 @@ def update_user(
     commit_unique(db, "Email already exists")
     db.refresh(item)
     return item
+
+
+@router.post("/users/{user_id}/revoke-sessions", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_user_sessions(
+    user_id: UUID, request: Request, db: Session = Depends(get_db), actor: User = Depends(admin_user),
+):
+    """Administrator force-logout: invalidates every access token already
+    issued to this user, without needing to know any of their individual
+    session tokens. Complements explicit self-service /auth/logout (which
+    only revokes the caller's own current token) for compromised-account
+    response."""
+    item = db.get(User, user_id)
+    if not item:
+        raise HTTPException(404, "User not found")
+    settings = get_settings()
+    revoke_all_for_user(item.id, ttl_seconds=settings.jwt_expire_minutes * 60)
+    record_audit(db, "USER_SESSIONS_REVOKED", "USER", actor.id, "USER", item.id, source_ip=source_ip(request))
+    db.commit()
 
 
 @router.get("/audit-logs", response_model=list[AuditResponse])
