@@ -14,9 +14,17 @@ from fastapi.testclient import TestClient
 from app.core.database import Base, SessionLocal, engine
 from app.core.rate_limit import reset_for_tests as reset_rate_limit_state
 from app.core.security import hash_password
+from app.core.token_revocation import reset_for_tests as reset_token_revocation_state
 from app.main import app
 from app.models import User
 from app.models.entities import UserRole
+
+
+@pytest.fixture(autouse=True)
+def clean_token_revocation_state():
+    reset_token_revocation_state()
+    yield
+    reset_token_revocation_state()
 
 
 @pytest.fixture(autouse=True)

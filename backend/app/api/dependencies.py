@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.config import get_settings
 from app.core.security import decode_access_token, hash_api_key
+from app.core.token_revocation import is_token_revoked, user_tokens_revoked_before
 from app.models import ApiCredential, User
 from app.models.entities import UserRole
 from app.services.access import require_admin
@@ -28,8 +29,20 @@ def resolve_admin_user(token: str, db: Session) -> User:
         if payload.get("type") != "admin":
             raise ValueError("wrong token type")
         user_id = UUID(payload["sub"])
+        jti = payload.get("jti")
+        issued_at = payload["iat"]
     except (jwt.PyJWTError, KeyError, ValueError):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired access token") from None
+    if jti and is_token_revoked(jti):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This session has been revoked")
+    revoked_before = user_tokens_revoked_before(user_id)
+    # <=, not <: JWT "iat" only has whole-second precision (PyJWT truncates
+    # on encode), so a token minted in the very same wall-clock second as a
+    # force-logout call cannot be reliably ordered against the cutoff. For
+    # a security control that must err in one direction, treat that
+    # ambiguous same-second case as revoked rather than valid.
+    if revoked_before is not None and issued_at <= revoked_before:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This session has been revoked")
     user = db.get(User, user_id)
     if not user or not user.active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or inactive user")
