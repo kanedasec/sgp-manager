@@ -15,7 +15,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null)
   const [loading, setLoading] = useState(true)
   const logout = () => {
-    void fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined)
+    const token = sessionStorage.getItem('sgbm_token')
+    // Sends the Bearer token so the backend can revoke it server-side
+    // (see app.core.token_revocation) instead of only clearing the local
+    // session -- otherwise a stolen token kept working for its full
+    // lifetime even after the legitimate user logged out.
+    void fetch('/api/v1/auth/logout', {
+      method: 'POST', credentials: 'same-origin',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    }).catch(() => undefined)
     sessionStorage.removeItem('sgbm_token')
     setUser(null)
   }
