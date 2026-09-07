@@ -302,6 +302,7 @@ For the same application and gate, non-revoked half-open time windows `[valid_fr
 - `/metrics` is intentionally unauthenticated for scraping. Protect this route at an external ingress when port `3000` is reachable from an untrusted network.
 - `/metrics` includes business-domain series (active bypasses per owner, enforcement block/pass counts per gate, audit event counts, audit webhook delivery outcomes) in addition to HTTP transport counters.
 - An optional `AUDIT_WEBHOOK_URL` forwards every audit event as a signed (HMAC-SHA256, `X-SGP-Signature` header) HTTP POST to an external SIEM, delivered asynchronously after the owning transaction commits so a SIEM outage never blocks an administrative request. `audit_logs` in PostgreSQL remains the durable source of truth regardless of webhook delivery outcome.
+- `audit_logs` rows are hash-chained (`sequence`, `prev_hash`, `entry_hash`) so a direct database-level edit or delete of historical audit data is detectable, not just prevented at the API layer (no route allows editing/deleting an entry). `GET /admin/audit-logs/verify-chain` recomputes and reports chain integrity.
 - The pipeline evaluation rate limiter is Redis-backed and shared across all backend replicas (`REDIS_URL`, default `redis://redis:6379/0` in Compose); a Redis outage degrades to a per-process counter rather than blocking pipeline calls, since rate limiting is an anti-abuse control and not the authentication/authorization boundary.
 
 ## Development and tests

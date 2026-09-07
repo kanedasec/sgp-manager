@@ -16,6 +16,7 @@ from app.models import (
 )
 from app.models.entities import UserRole
 from app.repositories.policies import policy_query
+from app.services.audit_chain import ChainVerificationError, verify_chain
 from app.schemas.admin import (
     ApiCredentialCreate, ApiCredentialCreated, ApiCredentialResponse, ApplicationCreate, ApplicationResponse,
     ApplicationUpdate, AuditResponse, DashboardResponse, GateCreate, GatePolicyCreate, GatePolicyResponse,
@@ -578,6 +579,22 @@ def list_audit_logs(
         query = query.where(AuditLog.entity_type == entity_type)
     entries = db.scalars(query.order_by(AuditLog.timestamp.desc()).limit(limit).offset(offset))
     return [AuditResponse(id=e.id, event_type=e.event_type, actor_type=e.actor_type, actor_id=e.actor_id, entity_type=e.entity_type, entity_id=e.entity_id, timestamp=e.timestamp, metadata=e.event_metadata, source_ip=e.source_ip) for e in entries]
+
+
+@router.get("/audit-logs/verify-chain")
+def verify_audit_chain(db: Session = Depends(get_db), _: User = Depends(admin_user)):
+    """Recomputes the tamper-evident hash chain (see app.services.audit_chain)
+    over every hashed audit_logs row and reports whether it is intact.
+    Intended for periodic operational checks (e.g. a scheduled job hitting
+    this endpoint) and incident response, not for every page load."""
+    try:
+        verified = verify_chain(db)
+    except ChainVerificationError as exc:
+        return {
+            "intact": False, "verified_entries": None, "broken_at_entry_id": exc.entry_id,
+            "broken_at_sequence": exc.sequence, "reason": exc.reason,
+        }
+    return {"intact": True, "verified_entries": verified}
 
 
 @router.get("/dashboard", response_model=DashboardResponse)
