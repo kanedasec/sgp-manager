@@ -116,9 +116,14 @@ def docs_user(request: Request, db: Session = Depends(get_db)) -> User:
     return user
 
 
-def api_credential(
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"), db: Session = Depends(get_db)
-) -> ApiCredential:
+def resolve_api_credential(x_api_key: str | None, db: Session) -> ApiCredential:
+    """Authenticates an X-API-Key header (existence, active, not expired)
+    without checking any scope. Scope enforcement is the caller's
+    responsibility via require_credential_scope, so a single credential
+    can carry multiple independent scopes (e.g. policy:read for pipeline
+    evaluation calls, application:manage for CI/CD-driven application
+    bootstrap) and each endpoint only requires the scope it actually
+    needs."""
     if not x_api_key or len(x_api_key) > 256:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API credential")
     credential = db.scalar(select(ApiCredential).where(ApiCredential.key_hash == hash_api_key(x_api_key)))
@@ -128,8 +133,27 @@ def api_credential(
     expiry = credential.expires_at
     if expiry and (expiry if expiry.tzinfo else expiry.replace(tzinfo=UTC)) <= now:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API credential")
-    if "policy:read" not in credential.scopes:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Credential does not have policy read scope")
     credential.last_used_at = now
     db.commit()
+    return credential
+
+
+def require_credential_scope(credential: ApiCredential, scope: str, label: str) -> None:
+    if scope not in credential.scopes:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"Credential does not have {label} scope")
+
+
+def api_credential(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"), db: Session = Depends(get_db)
+) -> ApiCredential:
+    credential = resolve_api_credential(x_api_key, db)
+    require_credential_scope(credential, "policy:read", "policy read")
+    return credential
+
+
+def api_credential_application_manage(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"), db: Session = Depends(get_db)
+) -> ApiCredential:
+    credential = resolve_api_credential(x_api_key, db)
+    require_credential_scope(credential, "application:manage", "application management")
     return credential

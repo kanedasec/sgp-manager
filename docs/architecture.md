@@ -139,7 +139,7 @@ By default a bypass gate scope's `severities` array suppresses every finding at 
 
 A pipeline submits an opaque API key using `X-API-Key`. The server calculates a deterministic HMAC-SHA-256 digest with a separate environment-held pepper, looks up only the digest, checks active/expiry/scope, and updates `last_used_at`. The raw key exists only in the create response.
 
-The scopes JSON array begins with `policy:read`, leaving room for application filters and additional machine operations later.
+The scopes JSON array begins with `policy:read`, granted by default when creating a credential. A second scope, `application:manage`, is opt-in per credential (set explicitly at creation time, never granted automatically) and gates a separate CI/CD-facing endpoint, `POST /policies/applications/ensure`: it looks up an application by slug and creates it under the requested gate policy if it does not already exist, so a pipeline can bootstrap a new application's registration and policy assignment without an operator first using the admin portal. It is explicitly *not* an upsert of policy assignment -- if the application already exists under a different gate policy than requested, the endpoint reports `policy_matches: false` and leaves the existing assignment untouched, since reassigning security policy from an unattended pipeline call is a governance decision, not something this endpoint should do silently. A concurrent race between two callers creating the same application resolves safely: the loser's insert hits the existing unique slug constraint and the endpoint returns the winner's state instead of erroring.
 
 ## Administrative flow
 

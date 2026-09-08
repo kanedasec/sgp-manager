@@ -462,9 +462,14 @@ def list_credentials(db: Session = Depends(get_db), _: User = Depends(admin_user
 @router.post("/api-credentials", response_model=ApiCredentialCreated, status_code=201)
 def create_credential(data: ApiCredentialCreate, request: Request, db: Session = Depends(get_db), user: User = Depends(admin_user)):
     plain_key, prefix = generate_api_key()
-    item = ApiCredential(id=uuid4(), name=data.name.strip(), key_hash=hash_api_key(plain_key), prefix=prefix, expires_at=data.expires_at, created_by=user.id)
+    item = ApiCredential(
+        id=uuid4(), name=data.name.strip(), key_hash=hash_api_key(plain_key), prefix=prefix,
+        scopes=data.scopes, expires_at=data.expires_at, created_by=user.id,
+    )
     db.add(item)
-    record_audit(db, "API_CREDENTIAL_CREATED", "USER", user.id, "API_CREDENTIAL", item.id, {"name": item.name, "prefix": prefix}, source_ip(request))
+    record_audit(db, "API_CREDENTIAL_CREATED", "USER", user.id, "API_CREDENTIAL", item.id, {
+        "name": item.name, "prefix": prefix, "scopes": item.scopes,
+    }, source_ip(request))
     db.commit()
     db.refresh(item)
     return ApiCredentialCreated(**ApiCredentialResponse.model_validate(item).model_dump(), api_key=plain_key)

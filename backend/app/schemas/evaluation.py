@@ -60,3 +60,29 @@ class EnforcementEvaluationResponse(BaseModel):
     application: str
     generated_at: datetime
     gates: list[EvaluatedGateEnforcement]
+
+
+class EnsureApplicationRequest(BaseModel):
+    application: Slug = Field(min_length=2, max_length=100, description="Application identifier to look up or create")
+    gate_policy: Slug = Field(
+        min_length=2, max_length=100,
+        description="Gate policy to assign if the application does not exist yet",
+    )
+    name: str | None = Field(
+        default=None, min_length=2, max_length=120,
+        description="Display name for a newly created application; defaults to the application slug when omitted",
+    )
+
+
+class EnsureApplicationResponse(BaseModel):
+    application: str
+    created: bool = Field(description="True if this call created the application; false if it already existed")
+    gate_policy: str = Field(description="The application's current gate policy slug")
+    policy_matches: bool = Field(
+        description=(
+            "False when the application already existed under a DIFFERENT gate policy than requested. "
+            "This endpoint never changes the policy of an existing application -- it only reports the "
+            "mismatch so the caller (a CI/CD pipeline) can decide how to handle it, since silently "
+            "reassigning security policy from an unattended pipeline call would be a governance risk."
+        ),
+    )

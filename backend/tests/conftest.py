@@ -107,3 +107,13 @@ def api_key(client, admin_headers):
     response = client.post("/api/v1/admin/api-credentials", headers=admin_headers, json={"name": "pytest-pipeline"})
     assert response.status_code == 201
     return response.json()["api_key"], response.json()["id"]
+
+
+@pytest.fixture
+def management_api_key(client, admin_headers):
+    response = client.post(
+        "/api/v1/admin/api-credentials", headers=admin_headers,
+        json={"name": "pytest-pipeline-manage", "scopes": ["policy:read", "application:manage"]},
+    )
+    assert response.status_code == 201
+    return response.json()["api_key"], response.json()["id"]
