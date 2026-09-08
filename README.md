@@ -162,9 +162,30 @@ The only published container port is nginx. Do not add a PostgreSQL `ports:` map
 
 ## Pipeline integration
 
-Create an API credential in **Access Management → API Credentials** and copy it immediately. The full value is not recoverable.
+Create an API credential in **Access Management → API Credentials** and copy it immediately. The full value is not recoverable. It defaults to the `policy:read` scope; grant `application:manage` too if the credential also needs to bootstrap new applications from CI/CD (see below).
 
-First resolve the ordered security pipe. The workflow must stop on every error,
+### Bootstrapping a new application from CI/CD
+
+`POST /policies/applications/ensure` looks up an application by slug and creates it under a given gate policy if it does not exist yet, so a pipeline can register itself on first run without an operator using the portal first. It requires the `application:manage` scope. It never changes the gate policy of an application that already exists -- if the existing assignment differs from what you requested, `policy_matches` is `false` and nothing is modified; decide explicitly (via the portal, or a separate documented process) whether to reassign it.
+
+```bash
+curl --fail-with-body -X POST \
+  http://localhost:3000/api/v1/policies/applications/ensure \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: ${BYPA...EY}" \
+  -d '{"application":"payment-api","gate_policy":"default-security-policy"}'
+```
+
+```json
+{
+  "application": "payment-api",
+  "created": true,
+  "gate_policy": "default-security-policy",
+  "policy_matches": true
+}
+```
+
+Then resolve the ordered security pipe. The workflow must stop on every error,
 an empty response, or an unknown gate implementation:
 
 ```bash

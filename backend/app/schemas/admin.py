@@ -317,9 +317,22 @@ class PolicyResponse(BaseModel):
     status: str
 
 
+ALLOWED_API_CREDENTIAL_SCOPES = ("policy:read", "application:manage")
+
+
 class ApiCredentialCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     expires_at: datetime | None = None
+    scopes: list[str] = Field(
+        default_factory=lambda: ["policy:read"],
+        description=(
+            "Capabilities granted to this credential. 'policy:read' (default) allows the pipeline "
+            "evaluation endpoints (/policies/evaluate, /resolve-pipeline, /evaluate-enforcement). "
+            "'application:manage' additionally allows POST /policies/applications/ensure to create "
+            "applications and read their current gate policy assignment from CI/CD. Grant only what "
+            "a given pipeline integration actually needs."
+        ),
+    )
 
     @field_validator("expires_at")
     @classmethod
@@ -329,6 +342,17 @@ class ApiCredentialCreate(BaseModel):
             if value <= datetime.now(UTC):
                 raise ValueError("expires_at must be in the future")
         return value
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: list[str]) -> list[str]:
+        unique = sorted(set(value))
+        if not unique:
+            raise ValueError("at least one scope is required")
+        invalid = [scope for scope in unique if scope not in ALLOWED_API_CREDENTIAL_SCOPES]
+        if invalid:
+            raise ValueError(f"unknown scope(s): {', '.join(invalid)}")
+        return unique
 
 
 class ApiCredentialResponse(BaseModel):
