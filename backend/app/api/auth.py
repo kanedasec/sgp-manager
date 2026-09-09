@@ -79,7 +79,7 @@ def set_documentation_cookie(response: Response, token: str) -> None:
 
 
 def issue_session(db: Session, user: User, response: Response, request: Request, event: str) -> LoginResponse:
-    token, expires = create_access_token(user.id, user.role.value)
+    token, expires = create_access_token(user.id, user.role.value, user.credential_version)
     if user.must_change_password:
         settings = get_settings()
         response.delete_cookie(
@@ -90,6 +90,43 @@ def issue_session(db: Session, user: User, response: Response, request: Request,
     else:
         set_documentation_cookie(response, token)
     record_audit(db, event, "USER", user.id, "USER", user.id, source_ip=source_ip(request))
+    db.commit()
+    return LoginResponse(access_token=token, expires_at=expires, user=user_response(user))
+
+
+def issue_session_after_credential_change(
+    db: Session, user: User, response: Response, request: Request, event: str,
+    metadata: dict | None = None,
+) -> LoginResponse:
+    """Like issue_session, but for actions that change what a session is
+    allowed to do -- password change, administrator password reset, and
+    MFA enable/disable.
+
+    Before user.credential_version existed, resolve_admin_user()
+    (app.api.dependencies) re-evaluated must_change_password / mfa_enabled
+    from the database on every request, but never rejected a token
+    *issued* before the flag changed: a stale token stayed just as
+    authorized as a freshly minted one, silently defeating a password
+    reset used to recover a compromised account and letting a
+    pre-enrollment token become fully authorized the moment MFA was
+    enabled elsewhere (pentest finding F-02). This increments
+    credential_version and embeds the new value ("cv" claim) in the token
+    minted here, so every other outstanding token -- whose embedded cv is
+    now stale -- is rejected on its very next use, while this call's own
+    replacement token remains valid.
+    """
+    user.credential_version += 1
+    db.flush()
+    token, expires = create_access_token(user.id, user.role.value, user.credential_version)
+    if user.must_change_password:
+        settings = get_settings()
+        response.delete_cookie(
+            key=settings.admin_session_cookie_name, httponly=True, secure=settings.session_cookie_secure,
+            samesite="strict", path="/",
+        )
+    else:
+        set_documentation_cookie(response, token)
+    record_audit(db, event, "USER", user.id, "USER", user.id, metadata=metadata, source_ip=source_ip(request))
     db.commit()
     return LoginResponse(access_token=token, expires_at=expires, user=user_response(user))
 
@@ -174,14 +211,11 @@ def change_password(
     mandatory_change = user.must_change_password
     user.password_hash = hash_password(data.new_password)
     user.must_change_password = False
-    token, expires = create_access_token(user.id, user.role.value)
-    set_documentation_cookie(response, token)
-    record_audit(
-        db, "PASSWORD_CHANGED", "USER", user.id, "USER", user.id,
-        metadata={"mandatory_change_completed": mandatory_change}, source_ip=source_ip(request),
+    db.flush()
+    return issue_session_after_credential_change(
+        db, user, response, request, "PASSWORD_CHANGED",
+        metadata={"mandatory_change_completed": mandatory_change},
     )
-    db.commit()
-    return LoginResponse(access_token=token, expires_at=expires, user=user_response(user))
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -232,9 +266,9 @@ def enroll_mfa(request: Request, db: Session = Depends(get_db), user: User = Dep
     return MfaEnrollResponse(provisioning_uri=provisioning_uri(secret, user.username), secret=secret)
 
 
-@router.post("/mfa/enable", response_model=UserResponse)
+@router.post("/mfa/enable", response_model=LoginResponse)
 def enable_mfa(
-    data: MfaEnableRequest, request: Request, db: Session = Depends(get_db),
+    data: MfaEnableRequest, request: Request, response: Response, db: Session = Depends(get_db),
     user: User = Depends(authenticated_user),
 ):
     if user.mfa_enabled:
@@ -248,9 +282,13 @@ def enable_mfa(
     if not code_is_valid:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid verification code")
     user.mfa_enabled = True
-    record_audit(db, "MFA_ENABLED", "USER", user.id, "USER", user.id, source_ip=source_ip(request))
-    db.commit()
-    return user_response(user)
+    db.flush()
+    # Enabling MFA raises the account's required authentication strength.
+    # A token issued before enrollment must not silently become "MFA
+    # satisfied" just because the database flag changed under it (the old
+    # behavior current_user relied on): mint a fresh session and revoke
+    # every other token issued before it, exactly like a password change.
+    return issue_session_after_credential_change(db, user, response, request, "MFA_ENABLED")
 
 
 @router.post("/mfa/disable", response_model=UserResponse)
@@ -285,7 +323,7 @@ def oidc_login():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from None
 
 
-@router.post("/oidc/callback", response_model=LoginResponse)
+@router.post("/oidc/callback", response_model=LoginResponse | MfaChallengeResponse)
 def oidc_callback(
     code: str, state: str, request: Request, response: Response, db: Session = Depends(get_db),
 ):
@@ -310,4 +348,18 @@ def oidc_callback(
         record_audit(db, "OIDC_LOGIN_REJECTED_INACTIVE", "USER", user.id, "USER", user.id, source_ip=source_ip(request))
         db.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been deactivated")
+    if user.mfa_enabled:
+        # An IdP asserting the user's identity is not proof the caller also
+        # controls this application's independent TOTP factor: without this
+        # branch, oidc_callback() issued a full session directly while local
+        # /auth/login diverted the same account to an mfa_pending challenge,
+        # letting anyone who can complete IdP auth for an MFA-enabled account
+        # skip the application's second factor entirely (pentest finding
+        # F-00). Route OIDC through the identical challenge used by local
+        # login so both paths require the same completed authentication
+        # strength before a full session is issued.
+        mfa_token, expires = create_mfa_pending_token(user.id)
+        record_audit(db, "OIDC_LOGIN_MFA_CHALLENGE_ISSUED", "USER", user.id, "USER", user.id, source_ip=source_ip(request))
+        db.commit()
+        return MfaChallengeResponse(mfa_token=mfa_token, expires_at=expires)
     return issue_session(db, user, response, request, "OIDC_LOGIN_SUCCEEDED")

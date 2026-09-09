@@ -49,6 +49,17 @@ class User(Base):
     oidc_subject: Mapped[str | None] = mapped_column(String(255), index=True)
     mfa_secret_encrypted: Mapped[str | None] = mapped_column(Text)
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Incremented whenever this user's required authentication strength
+    # changes (password change/reset, MFA enable/disable). Embedded in
+    # every access token as "cv"; resolve_admin_user() rejects any token
+    # whose cv does not match the current value. This closes the pentest
+    # finding (F-02) where a token issued before one of those changes
+    # stayed fully authorized afterward, because the previous whole-second
+    # timestamp-cutoff mechanism (still used for administrator force
+    # logout, which changes no credential) cannot be embedded per-token
+    # and is vulnerable to same-second ordering ambiguity for the exact
+    # session performing the change.
+    credential_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     groups: Mapped[list["AccessGroup"]] = relationship(
