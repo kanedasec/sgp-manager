@@ -127,6 +127,37 @@ A gate referenced by any gate policy cannot be renamed or deactivated until an
 administrator removes it from those policies. These constraints prevent a gate
 catalog edit from silently changing or invalidating application pipelines.
 
+### Hard deletion
+
+Administrators can permanently delete applications, gates, gate policies, and
+bypass policies (`DELETE /admin/{applications,gates,gate-policies,bypass-policies}/{id}`).
+Every delete requires the ADMIN role, matching the rest of this namespace's
+existing admin-only write surface -- there is no owner-scoped delete
+permission. Deletion is fail-closed against dangling references: the database
+already enforces this at the schema level with `ON DELETE RESTRICT` on every
+foreign key touched here, and the API layer catches the resulting
+`IntegrityError` and returns a clean `409` naming what still needs to be
+cleared first, instead of a raw database error. Concretely:
+
+- An **Application** cannot be deleted while it still has any bypass policy
+  attached to it -- including old `REVOKED`/`EXPIRED` history, not just
+  currently-active ones. Delete (or, going forward, retain) that history
+  first.
+- A **Gate** cannot be deleted while it is used in any gate policy, or while
+  any bypass policy still scopes it.
+- A **Gate Policy** cannot be deleted while any application is still assigned
+  to it (reassign or delete those applications first).
+- A **Bypass Policy** has no dependents and can always be deleted, whether or
+  not it has been revoked.
+
+Nothing in `AuditLog` is deletable through this or any other endpoint --
+audit-log immutability (see "Audit log integrity" below) is unaffected by
+this feature. Every successful delete records its own `*_DELETED` audit
+entry (`APPLICATION_DELETED`, `GATE_DELETED`, `GATE_POLICY_DELETED`,
+`BYPASS_DELETED`) in the same transaction as the delete itself, so a 409
+conflict never leaves behind an audit entry describing a delete that didn't
+actually happen.
+
 A multi-gate bypass policy can contain only gates whose owner equals the policy owner. This is a deliberate isolation rule: without it, a user with `create-policies:appsec` could place a Quality-owned gate into an AppSec policy and cross the authorization boundary.
 
 ### Finding-scoped bypasses

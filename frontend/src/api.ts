@@ -19,6 +19,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     const detail = Array.isArray(body.detail) ? body.detail.map((x: { msg?: string }) => x.msg).join('; ') : body.detail
     throw new ApiError(response.status, detail || 'Request failed')
   }
+  if (response.status === 204) return undefined as T
   return response.json()
 }
 
