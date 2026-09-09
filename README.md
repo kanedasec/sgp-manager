@@ -49,7 +49,7 @@ On the first run, `secrets-init` generates independent random PostgreSQL, JWT-si
 Open:
 
 - Portal: <http://localhost:3000>
-- OpenAPI: <http://localhost:3000/docs> (requires an active portal login and completed password change)
+- OpenAPI: <http://localhost:3000/docs> (requires an ADMIN portal login with a completed password change and, if required, MFA enrollment)
 - Liveness: <http://localhost:3000/health>
 - Readiness: <http://localhost:3000/ready>
 - Metrics: <http://localhost:3000/metrics>
@@ -103,7 +103,7 @@ MFA_REQUIRED_FOR_ADMINS=true   # blocks ADMIN accounts from the portal until the
 
 A local Keycloak instance for development is available via `docker compose --profile dev-oidc up` (realm import at `docker/keycloak/sgp-manager-realm.json`, admin console on `http://localhost:8081`, dev users `dev-admin`/`DevAdminPass!123` and `dev-user`/`DevUserPass!123`).
 
-Every administrator, local or federated, can enroll TOTP MFA (`POST /api/v1/auth/mfa/enroll` then `/mfa/enable`) independent of `MFA_REQUIRED_FOR_ADMINS`. A login with MFA enabled returns a short-lived MFA challenge token instead of a session; that token cannot access any other endpoint until `POST /api/v1/auth/mfa/verify` succeeds.
+Every administrator, local or federated, can enroll TOTP MFA (`POST /api/v1/auth/mfa/enroll` then `/mfa/enable`) independent of `MFA_REQUIRED_FOR_ADMINS`. A login with MFA enabled -- local or OIDC -- returns a short-lived MFA challenge token instead of a session; that token cannot access any other endpoint until `POST /api/v1/auth/mfa/verify` succeeds. `POST /api/v1/auth/oidc/callback` applies the identical challenge for an MFA-enabled account: successful IdP authentication alone is never sufficient to skip the application's own TOTP factor.
 
 ## Initial administrator
 
@@ -302,7 +302,7 @@ edit-gates:quality
 
 Supported actions are `view`, `create`, and `edit`; supported resources are `gates` and `policies`. The special `:all` scope covers every owner. Roles from all active groups assigned to a `USER` are combined. An `edit-policies` role also authorizes manual revocation because revocation is a policy state change. Access management, applications, API credentials, audit logs, and the dashboard remain administrator-only; authenticated standard users may read the application catalog needed to compose and inspect policies.
 
-Policy ownership cannot be used to cross an authorization boundary: every gate selected in a multi-gate policy must have the same owner as the policy. Moving a gate or policy to another owner requires edit permission for both the existing and target owners.
+Policy ownership cannot be used to cross an authorization boundary: every gate selected in a multi-gate policy must have the same owner as the policy. Moving a gate or policy to another owner requires edit permission for both the existing and target owners, and a gate change is additionally blocked with `409` while any active (non-revoked, currently in its validity window) bypass still references it -- revoke or let it expire first. This stops gate-edit rights for two owners from substituting for policy-create rights on the destination owner. Enforcement independently requires an effective bypass's owner to match its gate's *current* owner, so this holds even if a gate's owner were ever changed through another path.
 
 Administrators (only) may permanently `DELETE` an application, gate, gate policy, or bypass policy; a delete blocked by a still-referencing record (e.g. an application with bypass-policy history, a gate still in a gate policy) returns `409` naming what to clear first. Deactivation/revocation remain the softer everyday tools -- disable an application or gate, or revoke a bypass policy or API credential -- without losing the record. Audit-log entries are never deletable through any endpoint.
 
@@ -326,6 +326,7 @@ For the same application and gate, non-revoked half-open time windows `[valid_fr
 - `/metrics` includes business-domain series (active bypasses per owner, enforcement block/pass counts per gate, audit event counts, audit webhook delivery outcomes) in addition to HTTP transport counters.
 - An optional `AUDIT_WEBHOOK_URL` forwards every audit event as a signed (HMAC-SHA256, `X-SGP-Signature` header) HTTP POST to an external SIEM, delivered asynchronously after the owning transaction commits so a SIEM outage never blocks an administrative request. `audit_logs` in PostgreSQL remains the durable source of truth regardless of webhook delivery outcome.
 - Access tokens carry a random `jti` and support server-side revocation: `POST /auth/logout` denylists the caller's own token, and `POST /admin/users/{id}/revoke-sessions` lets an administrator invalidate every token already issued to a compromised account. Both are backed by Redis and fail open (not enforced) on a Redis outage, the same tradeoff used by the rate limiter.
+- Every access token also embeds the account's `credential_version`. Changing your own password, having an administrator reset your password, or enabling MFA increments it and immediately invalidates every other token already issued to that account -- a stolen session cannot outlive the very credential-recovery action meant to shut it out. This check has no Redis dependency and cannot fail open.
 - `audit_logs` rows are hash-chained (`sequence`, `prev_hash`, `entry_hash`) so a direct database-level edit or delete of historical audit data is detectable, not just prevented at the API layer (no route allows editing/deleting an entry). `GET /admin/audit-logs/verify-chain` recomputes and reports chain integrity.
 - The pipeline evaluation rate limiter is Redis-backed and shared across all backend replicas (`REDIS_URL`, default `redis://redis:6379/0` in Compose); a Redis outage degrades to a per-process counter rather than blocking pipeline calls, since rate limiting is an anti-abuse control and not the authentication/authorization boundary.
 - `/auth/login` and `/auth/mfa/verify` are throttled too (`AUTH_LOGIN_RATE_LIMIT_PER_MINUTE`, `AUTH_MFA_VERIFY_RATE_LIMIT_PER_MINUTE`, default 10/minute), keyed by both source IP and the targeted account, to stop scripted password/TOTP guessing even though Argon2id already raises the per-guess cost.

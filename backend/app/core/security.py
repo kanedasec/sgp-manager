@@ -25,7 +25,7 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(user_id: UUID, role: str) -> tuple[str, datetime]:
+def create_access_token(user_id: UUID, role: str, credential_version: int = 0) -> tuple[str, datetime]:
     settings = get_settings()
     if settings.jwt_secret is None:  # Configuration validation normally makes this unreachable.
         raise RuntimeError("JWT secret is not configured")
@@ -33,10 +33,14 @@ def create_access_token(user_id: UUID, role: str) -> tuple[str, datetime]:
     # jti enables single-token revocation on logout (see app.core.token_revocation);
     # iat (as a numeric timestamp, not just a JWT-library-parsed datetime) lets a
     # whole-user force-logout invalidate every token issued before a given instant
-    # without needing to enumerate individual jtis.
+    # without needing to enumerate individual jtis; cv ("credential version") is
+    # compared against the user's current app.models.entities.User.credential_version
+    # by resolve_admin_user() (app.api.dependencies), so a token minted before a
+    # password change/reset or MFA enable/disable is rejected immediately rather
+    # than staying authorized against a now-superseded credential or factor.
     payload = {
         "sub": str(user_id), "role": role, "exp": expires, "iat": datetime.now(UTC), "type": "admin",
-        "jti": secrets.token_urlsafe(16),
+        "jti": secrets.token_urlsafe(16), "cv": credential_version,
     }
     return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm=settings.jwt_algorithm), expires
 

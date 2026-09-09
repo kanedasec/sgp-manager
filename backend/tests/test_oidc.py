@@ -192,6 +192,76 @@ def test_oidc_callback_provisions_a_new_local_user(client, oidc_settings, rsa_ke
         assert body["user"]["auth_provider"] == "OIDC"
 
 
+def _oidc_login_state(client):
+    with respx.mock:
+        respx.get(f"{ISSUER}/.well-known/openid-configuration").mock(
+            return_value=Response(200, json={
+                "authorization_endpoint": f"{ISSUER}/protocol/openid-connect/auth",
+                "token_endpoint": f"{ISSUER}/protocol/openid-connect/token",
+                "jwks_uri": f"{ISSUER}/protocol/openid-connect/certs",
+            })
+        )
+        login_response = client.get("/api/v1/auth/oidc/login")
+        assert login_response.status_code == 200
+        auth_url = login_response.json()["authorization_url"]
+        from urllib.parse import urlparse, parse_qs
+        state = parse_qs(urlparse(auth_url).query)["state"][0]
+        from app.api.auth import _oidc_pending
+        return state, _oidc_pending[state]
+
+
+def test_oidc_callback_challenges_mfa_enabled_account_instead_of_issuing_a_session(
+    client, oidc_settings, rsa_keypair, admin_headers,
+):
+    """Regression test for pentest finding F-00: oidc_callback() used to
+    call issue_session() directly regardless of user.mfa_enabled, letting
+    anyone who could complete IdP auth for an MFA-enabled account skip the
+    application's independent TOTP factor entirely. It must now return the
+    same mfa_pending challenge local /auth/login uses."""
+    import pyotp
+    from app.core.database import SessionLocal
+    from app.models import User
+
+    enroll = client.post("/api/v1/auth/mfa/enroll", headers=admin_headers)
+    secret = enroll.json()["secret"]
+    code = pyotp.TOTP(secret).now()
+    enabled = client.post("/api/v1/auth/mfa/enable", headers=admin_headers, json={"code": code})
+    assert enabled.status_code == 200
+
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == "admin").one()
+        user.oidc_subject = "mfa-oidc-subject"
+        user.auth_provider = user.auth_provider  # no-op, keep LOCAL so password login above stays valid
+        db.commit()
+
+    state, nonce = _oidc_login_state(client)
+    now = int(time.time())
+    claims = {
+        "iss": ISSUER, "aud": "sgp-manager", "sub": "mfa-oidc-subject",
+        "iat": now, "exp": now + 300, "nonce": nonce,
+        "email": "admin@test.local", "name": "Test Admin", "groups": [],
+    }
+    with respx.mock:
+        _mock_idp(rsa_keypair, claims)
+        callback = client.post(f"/api/v1/auth/oidc/callback?code=auth-code&state={state}")
+    assert callback.status_code == 200
+    body = callback.json()
+    assert body["mfa_required"] is True
+    assert "mfa_token" in body
+    assert "access_token" not in body
+
+    # The pending token cannot reach any authenticated endpoint on its own.
+    denied = client.get("/api/v1/admin/applications", headers={"Authorization": f"Bearer {body['mfa_token']}"})
+    assert denied.status_code in (401, 403)
+
+    verified = client.post(
+        "/api/v1/auth/mfa/verify", headers={"Authorization": f"Bearer {body['mfa_token']}"},
+        json={"code": pyotp.TOTP(secret).now()},
+    )
+    assert verified.status_code == 200
+    assert "access_token" in verified.json()
+
+
 def test_oidc_callback_rejects_unknown_state(client, oidc_settings):
     response = client.post("/api/v1/auth/oidc/callback?code=x&state=never-issued")
     assert response.status_code == 400

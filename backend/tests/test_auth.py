@@ -26,6 +26,31 @@ def test_api_documentation_requires_portal_login(client):
     assert client.get("/openapi.json").status_code == 401
 
 
+def test_non_admin_portal_session_cannot_access_documentation(client):
+    """Regression test for pentest finding F-03: docs_user() previously
+    accepted any active portal login regardless of role, letting a
+    zero-permission USER retrieve the complete internal route/schema
+    inventory via /docs, /redoc, and /openapi.json."""
+    user = client.post("/api/v1/admin/users", headers=_admin_headers(client), json={
+        "username": "docs.viewer", "password": "DocsViewerPass!123", "display_name": "Docs Viewer",
+        "email": "docs.viewer@example.com", "role": "USER", "group_ids": [],
+    })
+    assert user.status_code == 201
+    login = client.post("/api/v1/auth/login", json={"username": "docs.viewer", "password": "DocsViewerPass!123"})
+    assert login.status_code == 200
+    cookie = login.headers["set-cookie"]
+    client.cookies.set(cookie.split("=", 1)[0], cookie.split("=", 1)[1].split(";", 1)[0])
+    assert client.get("/docs").status_code == 403
+    assert client.get("/redoc").status_code == 403
+    assert client.get("/openapi.json").status_code == 403
+
+
+def _admin_headers(client):
+    login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "StrongTestPass!123"})
+    assert login.status_code == 200
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
 def test_portal_login_grants_documentation_session(client):
     login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "StrongTestPass!123"})
     assert login.status_code == 200

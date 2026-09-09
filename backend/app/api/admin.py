@@ -26,7 +26,7 @@ from app.schemas.admin import (
     UserAdminCreate, UserAdminResponse, UserAdminUpdate,
 )
 from app.services.audit import record_audit
-from app.services.access import permitted_owner_ids, require_any_permission, require_permission
+from app.services.access import has_permission, permitted_owner_ids, require_any_permission, require_permission
 from app.services.gate_policies import (
     ensure_default_gate_policy, gate_policy_query, get_gate_policy, replace_policy_gates,
     serialize_gate_policy,
@@ -187,9 +187,14 @@ def create_gate(data: GateCreate, request: Request, db: Session = Depends(get_db
 @router.get("/gates/{item_id}", response_model=GateResponse)
 def get_gate(item_id: UUID, db: Session = Depends(get_db), user: User = Depends(current_user)):
     item = db.get(Gate, item_id)
-    if not item:
+    # Checking permission before distinguishing "missing" from "exists but
+    # not permitted" avoids a UUID existence oracle across the
+    # authorization boundary (pentest finding F-04): the previous
+    # load-then-403 ordering let a caller confirm a specific gate UUID is
+    # real (403) versus made up (404) without ever having view permission
+    # for it. Both cases now return the identical 404.
+    if not item or not has_permission(user, "gates", "view", item.owner_id):
         raise HTTPException(404, "Gate not found")
-    require_permission(user, "gates", "view", item.owner_id)
     return item
 
 
@@ -209,11 +214,34 @@ def update_gate(item_id: UUID, data: GateUpdate, request: Request, db: Session =
         raise HTTPException(409, "Remove the gate from every gate policy before changing its identifier")
     if changes.get("active") is False and referenced:
         raise HTTPException(409, "Remove the gate from every gate policy before deactivating it")
-    if "owner_id" in changes:
+    if "owner_id" in changes and changes["owner_id"] != item.owner_id:
         new_owner = db.get(OwnerLabel, changes["owner_id"])
         if not new_owner or not new_owner.active:
             raise HTTPException(400, "Owner does not exist or is inactive")
         require_permission(user, "gates", "edit", new_owner.id)
+        # A bypass created while this gate belonged to its current owner is
+        # only authorized because its creator held policy-create permission
+        # for *that* owner. Letting the gate silently carry an active
+        # bypass across an owner change would let gate-edit rights for two
+        # owners substitute for policy-create rights on the destination
+        # owner, crossing the ownership boundary the RBAC model otherwise
+        # enforces (pentest finding F-01). Fail closed: an active,
+        # non-revoked, currently-in-window bypass scope on this gate must
+        # be revoked (or allowed to expire) before the owner can change.
+        now = datetime.now(UTC)
+        active_bypass = db.scalar(
+            select(func.count(BypassPolicyGate.id))
+            .join(BypassPolicy, BypassPolicy.id == BypassPolicyGate.policy_id)
+            .where(
+                BypassPolicyGate.gate_id == item.id,
+                BypassPolicyGate.revoked_at.is_(None),
+                BypassPolicyGate.valid_from <= now,
+                BypassPolicyGate.expires_at > now,
+                BypassPolicy.revoked_at.is_(None),
+            )
+        ) or 0
+        if active_bypass:
+            raise HTTPException(409, "Revoke every active bypass referencing this gate before changing its owner")
     for key, value in changes.items():
         if key == "default_blocking_severities":
             value = [severity.value for severity in value]
@@ -623,6 +651,15 @@ def update_user(
         item.groups = groups
     if password:
         item.password_hash = hash_password(password)
+        # Advances the target user's credential_version so every token
+        # already issued to them (embedding the pre-reset version in its
+        # "cv" claim -- see app.core.security.create_access_token and
+        # app.api.dependencies.resolve_admin_user) is rejected on its next
+        # use, instead of staying authorized against a superseded password
+        # for the rest of its lifetime (pentest finding F-02). Mirrors
+        # app.api.auth.issue_session_after_credential_change, which does
+        # the same for self-service password changes and MFA enrollment.
+        item.credential_version += 1
     if "role" in changes:
         changes["role"] = UserRole(changes["role"])
     for key, value in changes.items():

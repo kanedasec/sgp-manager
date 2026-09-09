@@ -148,7 +148,11 @@ def test_gate_permissions_filter_visibility_and_enforce_owner_scope(client, admi
     visible = client.get("/api/v1/admin/gates", headers=headers)
     assert visible.status_code == 200
     assert {item["id"] for item in visible.json()} == {appsec_gate["id"]}
-    assert client.get(f"/api/v1/admin/gates/{quality_gate['id']}", headers=headers).status_code == 403
+    # A gate outside the caller's permitted owners now returns 404, not 403:
+    # loading the record before checking permission let an unauthorized
+    # caller confirm whether a specific gate UUID exists (pentest finding
+    # F-04), so unauthorized and nonexistent are now indistinguishable.
+    assert client.get(f"/api/v1/admin/gates/{quality_gate['id']}", headers=headers).status_code == 404
     assert client.patch(
         f"/api/v1/admin/gates/{appsec_gate['id']}", headers=headers,
         json={"description": "Managed by the authorized owner group."},

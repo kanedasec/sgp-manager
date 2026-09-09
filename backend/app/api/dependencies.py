@@ -31,6 +31,7 @@ def resolve_admin_user(token: str, db: Session) -> User:
         user_id = UUID(payload["sub"])
         jti = payload.get("jti")
         issued_at = payload["iat"]
+        token_credential_version = payload.get("cv", 0)
     except (jwt.PyJWTError, KeyError, ValueError):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired access token") from None
     if jti and is_token_revoked(jti):
@@ -46,6 +47,14 @@ def resolve_admin_user(token: str, db: Session) -> User:
     user = db.get(User, user_id)
     if not user or not user.active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or inactive user")
+    # A token whose embedded credential version predates the user's current
+    # one was issued before a password change/reset or MFA enable/disable
+    # (see app.api.auth.issue_session_after_credential_change): reject it
+    # immediately rather than letting a stale session stay authorized
+    # against a now-superseded credential or missing second factor
+    # (pentest finding F-02).
+    if token_credential_version != user.credential_version:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This session has been revoked")
     return user
 
 
@@ -113,6 +122,12 @@ def docs_user(request: Request, db: Session = Depends(get_db)) -> User:
             status.HTTP_403_FORBIDDEN,
             "Multi-factor authentication setup is required for administrators before accessing API documentation",
         )
+    # The OpenAPI schema discloses the complete internal route/entity
+    # inventory (pentest finding F-03): any active portal login, including
+    # a zero-permission USER, previously satisfied this dependency. Require
+    # ADMIN explicitly, matching every other admin-only surface in this
+    # application, rather than "any authenticated session."
+    require_admin(user)
     return user
 
 
