@@ -304,7 +304,7 @@ Supported actions are `view`, `create`, and `edit`; supported resources are `gat
 
 Policy ownership cannot be used to cross an authorization boundary: every gate selected in a multi-gate policy must have the same owner as the policy. Moving a gate or policy to another owner requires edit permission for both the existing and target owners.
 
-No security-relevant entity has an HTTP `DELETE` operation. Applications and gates are disabled; policies and credentials are revoked.
+Administrators (only) may permanently `DELETE` an application, gate, gate policy, or bypass policy; a delete blocked by a still-referencing record (e.g. an application with bypass-policy history, a gate still in a gate policy) returns `409` naming what to clear first. Deactivation/revocation remain the softer everyday tools -- disable an application or gate, or revoke a bypass policy or API credential -- without losing the record. Audit-log entries are never deletable through any endpoint.
 
 ## Policy concurrency
 

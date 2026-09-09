@@ -1,5 +1,5 @@
 import {
-  ArrowDown, ArrowUp, Edit3, GripVertical, Layers3, Plus, Power, Save, ShieldCheck, X,
+  ArrowDown, ArrowUp, Edit3, GripVertical, Layers3, Plus, Power, Save, ShieldCheck, Trash2, X,
 } from 'lucide-react'
 import { useEffect, useState, type DragEvent, type FormEvent } from 'react'
 import { api } from '../api'
@@ -119,6 +119,15 @@ export default function GatePolicies() {
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not change policy state') }
   }
 
+  const remove = async (policy: GatePolicy) => {
+    setError('')
+    if (!window.confirm(`Permanently delete gate policy "${policy.name}"? This cannot be undone.`)) return
+    try {
+      await api(`/api/v1/admin/gate-policies/${policy.id}`, { method: 'DELETE' })
+      await load()
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not delete gate policy') }
+  }
+
   if (loading) return <Spinner />
   return <>
     <PageHeader
@@ -141,7 +150,7 @@ export default function GatePolicies() {
       <div className="policy-flow">{policy.gates.map((gate, index) => <div key={gate.gate_id}>
         <span>{String(index + 1).padStart(2, '0')}</span><div><b>{gate.gate_name}</b><code>{gate.gate_slug}</code></div><div className="badge-row">{gate.blocking_severities.map(severity => <Badge key={severity} tone={severity}>{severity}</Badge>)}</div>
       </div>)}</div>
-      <footer><button onClick={() => edit(policy)}><Edit3 size={15} /> Edit standard</button><button onClick={() => void toggle(policy)}><Power size={15} /> {policy.active ? 'Deactivate' : 'Activate'}</button></footer>
+      <footer><button onClick={() => edit(policy)}><Edit3 size={15} /> Edit standard</button><button onClick={() => void toggle(policy)}><Power size={15} /> {policy.active ? 'Deactivate' : 'Activate'}</button><button className="danger-action" onClick={() => void remove(policy)}><Trash2 size={15} /> Delete</button></footer>
     </article>)}</section> : <section className="panel"><Empty title="No gate policies" detail="Create a reusable security standard before registering an application." /></section>}
 
     {editor && <Modal wide title={`${editor.id ? 'Edit' : 'Create'} gate policy`} onClose={() => setEditor(null)}>

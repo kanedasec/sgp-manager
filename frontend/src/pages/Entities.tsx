@@ -1,4 +1,4 @@
-import { AppWindow, Edit3, Plus, Power, Search, ShieldCheck, Workflow } from 'lucide-react'
+import { AppWindow, Edit3, Plus, Power, Search, ShieldCheck, Trash2, Workflow } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
@@ -70,9 +70,19 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not change state') }
   }
 
+  const remove = async (item: Entity) => {
+    setError('')
+    if (!window.confirm(`Permanently delete "${item.name}"? This cannot be undone.`)) return
+    try {
+      await api(`/api/v1/admin/${kind}/${item.id}`, { method: 'DELETE' })
+      await load()
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not delete') }
+  }
+
   const label = applicationMode ? 'Application' : 'Security Gate'
   const canCreate = applicationMode ? user?.role === 'ADMIN' : owners.some(owner => can('gates', 'create', owner.slug))
   const canEdit = (item: Entity) => applicationMode ? user?.role === 'ADMIN' : !!item.owner && can('gates', 'edit', item.owner.slug)
+  const canDelete = user?.role === 'ADMIN'
   if (loading) return <Spinner />
 
   return <>
@@ -94,7 +104,7 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
         <p>{item.description || 'No description provided.'}</p>
         {applicationMode && item.gate_policy && <div className="assigned-standard"><ShieldCheck size={15} /><span>GATE POLICY</span><b>{item.gate_policy.name}</b><code>{item.gate_policy.slug}</code></div>}
         {!applicationMode && <div className="gate-defaults"><span>POLICY AUTHORING DEFAULT</span><div className="badge-row">{item.default_blocking_severities?.map(s => <Badge key={s} tone={s}>{s}</Badge>)}</div></div>}
-        {canEdit(item) && <div className="entity-actions"><button onClick={e => { e.stopPropagation(); setEditing(item) }}><Edit3 size={15} /> Edit</button><button onClick={e => { e.stopPropagation(); void toggle(item) }}><Power size={15} /> {item.active ? 'Disable' : 'Enable'}</button></div>}
+        {canEdit(item) && <div className="entity-actions"><button onClick={e => { e.stopPropagation(); setEditing(item) }}><Edit3 size={15} /> Edit</button><button onClick={e => { e.stopPropagation(); void toggle(item) }}><Power size={15} /> {item.active ? 'Disable' : 'Enable'}</button>{canDelete && <button className="danger-action" onClick={e => { e.stopPropagation(); void remove(item) }}><Trash2 size={15} /> Delete</button>}</div>}
       </article>)}</div> : <Empty title={`No ${kind} found`} detail={`Create the first ${label.toLowerCase()} or change the search term.`} />}
     </section>
 

@@ -45,6 +45,20 @@ def commit_unique(db: Session, message: str) -> None:
         raise HTTPException(status.HTTP_409_CONFLICT, message) from None
 
 
+def delete_or_conflict(db, item, conflict_message):
+    """Hard-delete `item`. Any FK still pointing at it (ON DELETE RESTRICT)
+    surfaces as a clean 409 instead of a raw database error, and the audit
+    entry recorded alongside this call rolls back together with the failed
+    delete so no orphaned '*_DELETED' entry is left for something that, in
+    fact, was not deleted."""
+    db.delete(item)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, conflict_message) from None
+
+
 def require_active_gate_policy(db: Session, policy_id: UUID) -> GatePolicy:
     policy = get_gate_policy(db, policy_id)
     if not policy or not policy.active:
@@ -124,6 +138,18 @@ def update_application(item_id: UUID, data: ApplicationUpdate, request: Request,
     return item
 
 
+@router.delete("/applications/{item_id}", status_code=204)
+def delete_application(item_id: UUID, request: Request, db: Session = Depends(get_db), user: User = Depends(admin_user)):
+    item = db.get(Application, item_id)
+    if not item:
+        raise HTTPException(404, "Application not found")
+    referenced = db.scalar(select(func.count(BypassPolicy.id)).where(BypassPolicy.application_id == item.id)) or 0
+    if referenced:
+        raise HTTPException(409, "Delete every bypass policy for this application (including revoked/expired history) before deleting it")
+    record_audit(db, "APPLICATION_DELETED", "USER", user.id, "APPLICATION", item.id, {"slug": item.slug}, source_ip(request))
+    delete_or_conflict(db, item, "Application is still referenced by another record")
+
+
 @router.get("/gates", response_model=list[GateResponse])
 def list_gates(
     include_inactive: bool = True, db: Session = Depends(get_db), user: User = Depends(current_user),
@@ -196,6 +222,25 @@ def update_gate(item_id: UUID, data: GateUpdate, request: Request, db: Session =
     commit_unique(db, "Gate identifier already exists")
     db.refresh(item)
     return item
+
+
+@router.delete("/gates/{item_id}", status_code=204)
+def delete_gate(item_id: UUID, request: Request, db: Session = Depends(get_db), user: User = Depends(admin_user)):
+    item = db.get(Gate, item_id)
+    if not item:
+        raise HTTPException(404, "Gate not found")
+    referenced = db.scalar(
+        select(func.count(GatePolicyGate.id)).where(GatePolicyGate.gate_id == item.id)
+    ) or 0
+    if referenced:
+        raise HTTPException(409, "Remove the gate from every gate policy before deleting it")
+    bypassed = db.scalar(
+        select(func.count(BypassPolicyGate.id)).where(BypassPolicyGate.gate_id == item.id)
+    ) or 0
+    if bypassed:
+        raise HTTPException(409, "Delete every bypass policy referencing this gate (including revoked/expired history) before deleting it")
+    record_audit(db, "GATE_DELETED", "USER", user.id, "GATE", item.id, {"slug": item.slug}, source_ip(request))
+    delete_or_conflict(db, item, "Gate is still referenced by another record")
 
 
 def serialize_security_pipeline(policy: GatePolicy) -> SecurityPipelineResponse:
@@ -321,6 +366,20 @@ def update_gate_policy(
     commit_unique(db, "Gate policy identifier or gate order already exists")
     item = get_gate_policy(db, item.id)
     return serialize_gate_policy(db, item)
+
+
+@router.delete("/gate-policies/{policy_id}", status_code=204)
+def delete_gate_policy(policy_id: UUID, request: Request, db: Session = Depends(get_db), user: User = Depends(admin_user)):
+    item = get_gate_policy(db, policy_id)
+    if not item:
+        raise HTTPException(404, "Gate policy not found")
+    referenced = db.scalar(
+        select(func.count(Application.id)).where(Application.gate_policy_id == item.id)
+    ) or 0
+    if referenced:
+        raise HTTPException(409, "Reassign or delete every application on this gate policy before deleting it")
+    record_audit(db, "GATE_POLICY_DELETED", "USER", user.id, "GATE_POLICY", item.id, {"slug": item.slug}, source_ip(request))
+    delete_or_conflict(db, item, "Gate policy is still referenced by another record")
 
 
 @router.get("/bypass-policies", response_model=list[PolicyResponse])
@@ -452,6 +511,18 @@ def revoke_policy(policy_id: UUID, data: RevokeRequest, request: Request, db: Se
     db.commit()
     db.refresh(policy)
     return serialize_policy(policy)
+
+
+@router.delete("/bypass-policies/{policy_id}", status_code=204)
+def delete_bypass(policy_id: UUID, request: Request, db: Session = Depends(get_db), user: User = Depends(admin_user)):
+    policy = db.get(BypassPolicy, policy_id)
+    if not policy:
+        raise HTTPException(404, "Bypass policy not found")
+    record_audit(db, "BYPASS_DELETED", "USER", user.id, "BYPASS_POLICY", policy.id, {
+        "application_id": str(policy.application_id), "owner_id": str(policy.owner_id),
+        "was_revoked": policy.revoked_at is not None,
+    }, source_ip(request))
+    delete_or_conflict(db, policy, "Bypass policy is still referenced by another record")
 
 
 @router.get("/api-credentials", response_model=list[ApiCredentialResponse])
