@@ -25,6 +25,7 @@ Pipeline ------ X-API-Key ---> evaluate-enforcement -> PASS / BLOCK
 - Human authorization is owner-scoped group RBAC. `ADMIN` users have implicit global access; `USER` accounts receive additive `view`, `create`, and `edit` roles from active groups.
 - Every gate defines authoring defaults. Each reusable gate policy owns its ordered active scans and independent blocking severities. Effective enforcement is `assigned policy severities - currently active bypass severities`.
 - Administrators create standards such as `crown-jewels`, assign one to each application, and compose each standard by dragging gates in the portal. Pipeline preflight resolves the application assignment before any scanner starts.
+- Owner-scoped custom policies store safely validated JSON or YAML documents through a separate API. They are inert policy data until an explicitly integrated consumer interprets them and never alter gate enforcement implicitly.
 - `status` is calculated from UTC timestamps and revocation fields. A future policy is shown as `SCHEDULED`; effective states remain `ACTIVE`, `EXPIRED`, and `REVOKED`.
 
 More detail is in [docs/architecture.md](docs/architecture.md).
@@ -298,9 +299,18 @@ edit-policies:appsec
 view-gates:appsec
 create-gates:architecture
 edit-gates:quality
+view-custom-policies:all
+create-custom-policies:appsec
+edit-custom-policies:appsec
 ```
 
-Supported actions are `view`, `create`, and `edit`; supported resources are `gates` and `policies`. The special `:all` scope covers every owner. Roles from all active groups assigned to a `USER` are combined. An `edit-policies` role also authorizes manual revocation because revocation is a policy state change. Access management, applications, API credentials, audit logs, and the dashboard remain administrator-only; authenticated standard users may read the application catalog needed to compose and inspect policies.
+Supported actions are `view`, `create`, and `edit`; supported resources are `gates`, `policies`, and `custom-policies`. The special `:all` scope covers every owner. Roles from all active groups assigned to a `USER` are combined. An `edit-policies` role also authorizes manual revocation because revocation is a policy state change. Access management, application mutation, API credentials, audit logs, and the dashboard remain administrator-only. Standard users with gate or bypass-policy grants may read the application catalog needed for those resources; custom-policy-only grants do not expose it.
+
+### Custom policy documents
+
+Gate policies remain available at `/api/v1/admin/gate-policies` and are the only reusable standards used by pipeline resolution and enforcement. Custom policy documents use the separate `/api/v1/admin/custom-policies` collection and accept either `json` or `yaml` source. The server requires an object at the document root, safely parses YAML, bounds source size, nesting, and value count, and stores both the original source and a canonical JSON-compatible representation. Custom policy content is never included in audit metadata.
+
+Custom policies are owner-scoped and can be created or edited by standard users with the corresponding `custom-policies` group role. They can be deactivated but are not physically deleted through the API, preserving their audit history. No custom document changes `resolve-pipeline`, `evaluate`, or `evaluate-enforcement`; adding execution semantics requires a separate reviewed contract.
 
 Policy ownership cannot be used to cross an authorization boundary: every gate selected in a multi-gate policy must have the same owner as the policy. Moving a gate or policy to another owner requires edit permission for both the existing and target owners, and a gate change is additionally blocked with `409` while any active (non-revoked, currently in its validity window) bypass still references it -- revoke or let it expire first. This stops gate-edit rights for two owners from substituting for policy-create rights on the destination owner. Enforcement independently requires an effective bypass's owner to match its gate's *current* owner, so this holds even if a gate's owner were ever changed through another path.
 

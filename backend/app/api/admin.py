@@ -72,7 +72,7 @@ def require_active_gate_policy(db: Session, policy_id: UUID) -> GatePolicy:
 
 @router.get("/owner-labels", response_model=list[OwnerResponse])
 def list_owner_labels(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_any_permission(user)
+    require_any_permission(user, {"gates", "policies", "custom-policies"})
     return list(db.scalars(select(OwnerLabel).where(OwnerLabel.active.is_(True)).order_by(OwnerLabel.name)))
 
 

@@ -185,6 +185,32 @@ class GatePolicyGate(Base):
     gate: Mapped[Gate] = relationship(back_populates="gate_policy_scopes", lazy="joined")
 
 
+class CustomPolicy(Base):
+    """Owner-scoped JSON/YAML document, separate from gate enforcement."""
+
+    __tablename__ = "custom_policies"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "slug", name="uq_custom_policy_owner_slug"),
+        CheckConstraint("format IN ('json', 'yaml')", name="ck_custom_policy_format"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("owner_labels.id", ondelete="RESTRICT"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    slug: Mapped[str] = mapped_column(String(100), index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    format: Mapped[str] = mapped_column(String(8))
+    document: Mapped[str] = mapped_column(Text)
+    parsed_document: Mapped[dict[str, Any]] = mapped_column(JSON)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    owner: Mapped[OwnerLabel] = relationship(lazy="joined")
+    creator: Mapped[User] = relationship()
+
+
 class BypassPolicy(Base):
     __tablename__ = "bypass_policies"
     __table_args__ = (Index("ix_policy_app_window", "application_id", "valid_from", "expires_at"),)

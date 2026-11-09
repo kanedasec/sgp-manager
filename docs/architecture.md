@@ -32,12 +32,15 @@ The backend is separated into HTTP routes (`api`), input/output contracts (`sche
 - `Gate`: stable unique slug for a security control, required owner, policy-authoring severity defaults, and active flag.
 - `GatePolicy`: reusable named security standard assigned to one or more applications.
 - `GatePolicyGate`: ordered gate membership and the policy-specific blocking severity set. A gate appears at most once per policy and positions are contiguous at the API boundary.
+- `CustomPolicy`: owner-scoped JSON/YAML source plus its validated canonical JSON representation. It is managed independently from gate policies and has no implicit enforcement semantics.
 - `BypassPolicy`: application-level, owner-scoped, auditable policy header containing justification, half-open validity window, creator and revocation trail.
 - `BypassPolicyGate`: one gate scope inside a policy, with an independent JSON severity set and an optional JSON `finding_scope` allow-list (CVE IDs or scanner fingerprints). A policy may contain many gate scopes but a gate appears at most once in that policy.
 - `ApiCredential`: human label, non-secret prefix, HMAC digest, `policy:read` scopes array, usage/expiry timestamps, and active flag.
 - `AuditLog`: actor, event, target, timestamp, sanitized metadata, and source IP. There is no administrative delete API.
 
 All primary keys are UUIDs. All timestamps use timezone-aware database columns and API values are normalized to UTC. The frontend renders dates using the browser locale.
+
+Migration `20261109_0012` adds the empty `custom_policies` table with owner and creator foreign keys, owner-scoped slug uniqueness, format validation, source and canonical JSON columns, active state, and timezone-aware timestamps. Because the domain is new and deliberately separate from gate enforcement, no existing rows or pipeline contracts are migrated.
 
 Migration `20260826_0003` makes the earlier gate-default field explicit as `default_blocking_severities`. Existing non-empty selections are preserved; empty selections are upgraded to all four severities so previously unconfigured gates become fail-closed rather than silently permitting findings.
 
@@ -112,9 +115,12 @@ view-policies:all
 create-policies:appsec
 edit-policies:appsec
 view-gates:quality
+view-custom-policies:appsec
+create-custom-policies:appsec
+edit-custom-policies:appsec
 ```
 
-The allowed action set is `view`, `create`, and `edit`; the current resource set is `gates` and `policies`. `:all` is a wildcard owner scope, not an owner label, and the slug `all` is reserved. `edit-policies` covers normal edits and manual revocation. Permission checks use owner UUIDs internally.
+The allowed action set is `view`, `create`, and `edit`; the current resource set is `gates`, `policies`, and `custom-policies`. `:all` is a wildcard owner scope, not an owner label, and the slug `all` is reserved. `edit-policies` covers normal edits and manual revocation. Permission checks use owner UUIDs internally.
 
 `app.services.access.ACTIONS`/`RESOURCES` are the single source of truth for this vocabulary: the validation regex (`ROLE_PATTERN`) is generated from them rather than duplicating the list, and `GET /admin/roles` returns `actions`/`resources` alongside the computed `roles` list so the portal's role-matrix UI (`frontend/src/pages/Groups.tsx`) renders from the same vocabulary the server enforces, instead of a hardcoded frontend copy that could silently drift from what the backend actually accepts. Extending the vocabulary (a new resource or action) is a one-line change to those two tuples; the regex, the `/admin/roles` response, and the portal UI all follow automatically.
 
