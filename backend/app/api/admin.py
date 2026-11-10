@@ -19,7 +19,8 @@ from app.models.entities import UserRole
 from app.repositories.policies import policy_query
 from app.services.audit_chain import ChainVerificationError, verify_chain
 from app.schemas.admin import (
-    ApiCredentialCreate, ApiCredentialCreated, ApiCredentialResponse, ApplicationCreate, ApplicationResponse,
+    API_CREDENTIAL_SCOPE_DEFINITIONS, ApiCredentialCreate, ApiCredentialCreated, ApiCredentialResponse,
+    ApiCredentialScopeDefinition, ApiCredentialScopesUpdate, ApplicationCreate, ApplicationResponse,
     ApplicationUpdate, AuditResponse, DashboardResponse, GateCreate, GatePolicyCreate, GatePolicyResponse,
     GatePolicyUpdate, GateResponse, GateUpdate, PolicyCreate, OwnerResponse, PolicyResponse, PolicyUpdate,
     RevokeRequest, SecurityPipelineResponse, SecurityPipelineUpdate,
@@ -558,6 +559,11 @@ def list_credentials(db: Session = Depends(get_db), _: User = Depends(admin_user
     return list(db.scalars(select(ApiCredential).order_by(ApiCredential.created_at.desc())))
 
 
+@router.get("/api-credential-scopes", response_model=list[ApiCredentialScopeDefinition])
+def list_credential_scopes(_: User = Depends(admin_user)):
+    return list(API_CREDENTIAL_SCOPE_DEFINITIONS)
+
+
 @router.post("/api-credentials", response_model=ApiCredentialCreated, status_code=201)
 def create_credential(data: ApiCredentialCreate, request: Request, db: Session = Depends(get_db), user: User = Depends(admin_user)):
     plain_key, prefix = generate_api_key()
@@ -572,6 +578,38 @@ def create_credential(data: ApiCredentialCreate, request: Request, db: Session =
     db.commit()
     db.refresh(item)
     return ApiCredentialCreated(**ApiCredentialResponse.model_validate(item).model_dump(), api_key=plain_key)
+
+
+@router.put("/api-credentials/{credential_id}/scopes", response_model=ApiCredentialResponse)
+def replace_credential_scopes(
+    credential_id: UUID,
+    data: ApiCredentialScopesUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_user),
+):
+    item = db.get(ApiCredential, credential_id)
+    if not item:
+        raise HTTPException(404, "API credential not found")
+    if not item.active:
+        raise HTTPException(409, "Revoked API credential access policies are immutable")
+    previous_scopes = sorted(item.scopes)
+    if previous_scopes == data.scopes:
+        return item
+    item.scopes = data.scopes
+    record_audit(
+        db,
+        "API_CREDENTIAL_SCOPES_UPDATED",
+        "USER",
+        user.id,
+        "API_CREDENTIAL",
+        item.id,
+        {"prefix": item.prefix, "previous_scopes": previous_scopes, "scopes": item.scopes},
+        source_ip(request),
+    )
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 @router.post("/api-credentials/{credential_id}/revoke", response_model=ApiCredentialResponse)

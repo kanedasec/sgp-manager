@@ -1,5 +1,16 @@
 # Pipeline API
 
+## Machine credential access policies
+
+Only an administrator authenticated with a Bearer JWT can create API credentials or replace their scopes. The portal reads the supported scope catalog from `GET /api/v1/admin/api-credential-scopes`, creates a key with `POST /api/v1/admin/api-credentials`, and can atomically replace an active key's scopes with `PUT /api/v1/admin/api-credentials/{credential_id}/scopes`.
+
+The supported machine scopes are:
+
+- `policy:read`: calls `/policies/evaluate`, `/policies/resolve-pipeline`, and `/policies/evaluate-enforcement`.
+- `application:manage`: the application-management permission. It calls `/policies/applications/ensure`, which may create a missing application under an explicitly requested active gate policy but never reassigns an existing application.
+
+At least one scope is required. Scope replacement is immediate and audited; it does not rotate or reveal the raw API key. Revoked credentials cannot be edited. API credentials never inherit the administrator role and cannot call admin endpoints.
+
 ## Resolve the security pipeline
 
 Before starting any scanner, a pipeline retrieves the centrally selected gates:

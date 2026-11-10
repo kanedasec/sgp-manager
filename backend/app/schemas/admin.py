@@ -317,7 +317,45 @@ class PolicyResponse(BaseModel):
     status: str
 
 
-ALLOWED_API_CREDENTIAL_SCOPES = ("policy:read", "application:manage")
+API_CREDENTIAL_SCOPE_DEFINITIONS = (
+    {
+        "scope": "policy:read",
+        "name": "Pipeline policy evaluation",
+        "description": "Resolve assigned gate policies, blocking severities, and effective bypasses.",
+        "endpoints": [
+            "POST /api/v1/policies/evaluate",
+            "POST /api/v1/policies/resolve-pipeline",
+            "POST /api/v1/policies/evaluate-enforcement",
+        ],
+    },
+    {
+        "scope": "application:manage",
+        "name": "Application management",
+        "description": (
+            "Create a missing application under an explicitly requested active gate policy and read the "
+            "existing assignment. It never reassigns an existing application."
+        ),
+        "endpoints": ["POST /api/v1/policies/applications/ensure"],
+    },
+)
+ALLOWED_API_CREDENTIAL_SCOPES = tuple(item["scope"] for item in API_CREDENTIAL_SCOPE_DEFINITIONS)
+
+
+def normalize_api_credential_scopes(value: list[str]) -> list[str]:
+    unique = sorted(set(value))
+    if not unique:
+        raise ValueError("at least one scope is required")
+    invalid = [scope for scope in unique if scope not in ALLOWED_API_CREDENTIAL_SCOPES]
+    if invalid:
+        raise ValueError(f"unknown scope(s): {', '.join(invalid)}")
+    return unique
+
+
+class ApiCredentialScopeDefinition(BaseModel):
+    scope: str
+    name: str
+    description: str
+    endpoints: list[str]
 
 
 class ApiCredentialCreate(BaseModel):
@@ -346,13 +384,16 @@ class ApiCredentialCreate(BaseModel):
     @field_validator("scopes")
     @classmethod
     def validate_scopes(cls, value: list[str]) -> list[str]:
-        unique = sorted(set(value))
-        if not unique:
-            raise ValueError("at least one scope is required")
-        invalid = [scope for scope in unique if scope not in ALLOWED_API_CREDENTIAL_SCOPES]
-        if invalid:
-            raise ValueError(f"unknown scope(s): {', '.join(invalid)}")
-        return unique
+        return normalize_api_credential_scopes(value)
+
+
+class ApiCredentialScopesUpdate(BaseModel):
+    scopes: list[str] = Field(min_length=1, max_length=len(ALLOWED_API_CREDENTIAL_SCOPES))
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: list[str]) -> list[str]:
+        return normalize_api_credential_scopes(value)
 
 
 class ApiCredentialResponse(BaseModel):
