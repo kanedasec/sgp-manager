@@ -10,7 +10,7 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, Counter, Histogram, generate_latest
 
-from app.api import access, admin, auth, evaluation, health
+from app.api import access, admin, auth, custom_policies, evaluation, health
 from app.api.dependencies import docs_user
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -132,4 +132,5 @@ app.include_router(health.router)
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(access.router, prefix="/api/v1")
+app.include_router(custom_policies.router, prefix="/api/v1")
 app.include_router(evaluation.router, prefix="/api/v1")

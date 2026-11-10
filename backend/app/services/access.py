@@ -15,7 +15,7 @@ from app.models.entities import UserRole
 # tuples, so adding a resource or action is a one-line change instead of a
 # multi-file, easy-to-miss edit.
 ACTIONS = ("view", "create", "edit")
-RESOURCES = ("gates", "policies")
+RESOURCES = ("gates", "policies", "custom-policies")
 _OWNER_SLUG_PATTERN = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 ROLE_PATTERN = re.compile(
     rf"^({'|'.join(ACTIONS)})-({'|'.join(RESOURCES)}):({_OWNER_SLUG_PATTERN}|all)$"
@@ -31,18 +31,24 @@ def require_admin(user: User) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator access required")
 
 
-def has_any_permission(user: User) -> bool:
-    """True for admins and for users whose active groups grant at least one
-    gates/policies permission. Used to gate read endpoints (applications,
-    owner labels) that have no single owner to scope against but must not
-    be readable by an authenticated user with zero assigned entitlements."""
+def has_any_permission(user: User, resources: set[str] | None = None) -> bool:
+    """Check for any active permission in the requested resource set.
+
+    The default deliberately excludes custom-policy grants so they cannot
+    widen access to existing application or bypass-policy inventory. Callers
+    such as the shared owner catalog opt in to additional resources explicitly.
+    """
     if is_admin(user):
         return True
-    return any(group.active and group.permissions for group in user.groups)
+    allowed_resources = resources or {"gates", "policies"}
+    return any(
+        group.active and any(permission.resource in allowed_resources for permission in group.permissions)
+        for group in user.groups
+    )
 
 
-def require_any_permission(user: User) -> None:
-    if not has_any_permission(user):
+def require_any_permission(user: User, resources: set[str] | None = None) -> None:
+    if not has_any_permission(user, resources):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No assigned permissions")
 
 

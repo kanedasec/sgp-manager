@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import type { ReactNode } from 'react'
-import { useAuth } from './auth'
+import { hasResourcePermission, useAuth } from './auth'
 import Layout from './components/Layout'
 import { Spinner } from './components/ui'
 import ApplicationDetail from './pages/ApplicationDetail'
@@ -11,6 +11,7 @@ import Entities from './pages/Entities'
 import Login from './pages/Login'
 import Policies from './pages/Policies'
 import GatePolicies from './pages/GatePolicies'
+import CustomPolicies from './pages/CustomPolicies'
 import ChangePassword from './pages/ChangePassword'
 
 function Protected() {
@@ -29,7 +30,12 @@ function PasswordChangeOnly() {
 
 function Home() {
   const { user } = useAuth()
-  return user?.role === 'ADMIN' ? <Dashboard /> : <Navigate to="/policies" replace />
+  if (user?.role === 'ADMIN') return <Dashboard />
+  const permissions = user?.permissions ?? []
+  if (hasResourcePermission(permissions, 'policies')) return <Navigate to="/policies" replace />
+  if (hasResourcePermission(permissions, 'custom-policies')) return <Navigate to="/custom-policies" replace />
+  if (hasResourcePermission(permissions, 'gates')) return <Navigate to="/gates" replace />
+  return <Navigate to="/applications" replace />
 }
 
 function AdminOnly({ children }: { children: ReactNode }) {
@@ -47,6 +53,7 @@ export default function App() {
       <Route path="applications/:id" element={<ApplicationDetail />} />
       <Route path="gates" element={<Entities kind="gates" />} />
       <Route path="gate-policies" element={<AdminOnly><GatePolicies /></AdminOnly>} />
+      <Route path="custom-policies" element={<CustomPolicies />} />
       <Route path="policies" element={<Policies />} />
       <Route path="access" element={<AdminOnly><AccessManagement /></AdminOnly>} />
       <Route path="credentials" element={<Navigate to="/access?tab=credentials" replace />} />

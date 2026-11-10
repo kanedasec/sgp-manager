@@ -3,11 +3,14 @@ import { api } from './api'
 
 export type SessionUser = { id: string; username: string; display_name: string; email: string; role: string; groups: string[]; permissions: string[]; must_change_password: boolean; auth_provider: string; mfa_enabled: boolean }
 export type LoginResult = { mfaRequired: false } | { mfaRequired: true; mfaToken: string }
+export type PermissionResource = 'gates' | 'policies' | 'custom-policies'
+export const hasResourcePermission = (permissions: string[], resource: PermissionResource) =>
+  ['view', 'create', 'edit'].some(action => permissions.some(permission => permission.startsWith(`${action}-${resource}:`)))
 type AuthValue = {
   user: SessionUser | null; loading: boolean; login: (username: string, password: string) => Promise<LoginResult>;
   verifyMfa: (mfaToken: string, code: string) => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
-  logout: () => void; can: (resource: 'gates' | 'policies', action: 'view' | 'create' | 'edit', ownerSlug?: string) => boolean
+  logout: () => void; can: (resource: PermissionResource, action: 'view' | 'create' | 'edit', ownerSlug?: string) => boolean
 }
 const AuthContext = createContext<AuthValue | null>(null)
 

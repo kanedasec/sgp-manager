@@ -1,14 +1,15 @@
-import { Activity, AppWindow, FileClock, Gauge, Layers3, LogOut, Menu, ShieldCheck, UsersRound, Workflow, X } from 'lucide-react'
+import { Activity, AppWindow, Braces, FileClock, Gauge, Layers3, LogOut, Menu, ShieldCheck, UsersRound, Workflow, X } from 'lucide-react'
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import { useAuth } from '../auth'
+import { hasResourcePermission, type PermissionResource, useAuth } from '../auth'
 
-const nav = [
+const nav: Array<{ to: string; label: string; icon: typeof Gauge; admin?: boolean; resources?: PermissionResource[] }> = [
   { to: '/', label: 'Dashboard', icon: Gauge, admin: true },
-  { to: '/applications', label: 'Applications', icon: AppWindow },
-  { to: '/gates', label: 'Security Gates', icon: Workflow, resource: 'gates' },
+  { to: '/applications', label: 'Applications', icon: AppWindow, resources: ['gates', 'policies'] },
+  { to: '/gates', label: 'Security Gates', icon: Workflow, resources: ['gates'] },
   { to: '/gate-policies', label: 'Gate Policies', icon: Layers3, admin: true },
-  { to: '/policies', label: 'Bypass Policies', icon: ShieldCheck, resource: 'policies' },
+  { to: '/custom-policies', label: 'Custom Policies', icon: Braces, resources: ['custom-policies'] },
+  { to: '/policies', label: 'Bypass Policies', icon: ShieldCheck, resources: ['policies'] },
   { to: '/access', label: 'Access Management', icon: UsersRound, admin: true },
   { to: '/audit', label: 'Audit Logs', icon: FileClock, admin: true },
 ]
@@ -17,7 +18,7 @@ export default function Layout() {
   const { user, logout } = useAuth()
   const [open, setOpen] = useState(false)
   const visibleNav = nav.filter(item => !item.admin || user?.role === 'ADMIN').filter(item =>
-    !item.resource || user?.role === 'ADMIN' || user?.permissions.some(permission => permission.includes(`-${item.resource}:`))
+    !item.resources || user?.role === 'ADMIN' || item.resources.some(resource => hasResourcePermission(user?.permissions ?? [], resource))
   )
   return <div className="shell">
     <a className="skip-link" href="#main">Skip to content</a>
