@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Resolve central security pipeline
         id: resolve
-        uses: kanedasec/platform-workflows/actions/sgp-pipeline-config@982b33599120d5a306c2878c57164aeead6f674e
+        uses: kanedasec/platform-workflows/actions/sgp-pipeline-config@2358c3996ce347e42ee8dfd09e2cba68a74a30bf
         env:
           SGP_MANAGER_API_KEY: ${{ secrets.SGP_MANAGER_API_KEY }}
 
@@ -42,7 +42,7 @@ jobs:
   security-scans:
     name: Full repository security
     needs: pipeline-config
-    uses: kanedasec/platform-workflows/.github/workflows/security.yaml@982b33599120d5a306c2878c57164aeead6f674e
+    uses: kanedasec/platform-workflows/.github/workflows/security.yaml@2358c3996ce347e42ee8dfd09e2cba68a74a30bf
     with:
       gates: ${{ needs.pipeline-config.outputs.gates }}
 
@@ -58,18 +58,19 @@ jobs:
       actions: read
       contents: read
     steps:
-      - name: Require successful pipeline discovery and scanners
+      - name: Require completed guardrail evidence
         env:
           PIPELINE_RESULT: ${{ needs.pipeline-config.result }}
           SCANNER_RESULT: ${{ needs.security-scans.result }}
         run: |
           if [[ "$PIPELINE_RESULT" != "success" || "$SCANNER_RESULT" != "success" ]]; then
-            echo "Security prerequisites failed: pipeline=$PIPELINE_RESULT scanners=$SCANNER_RESULT"
+            echo "Guardrail execution failed: publishing and deployment remain blocked."
+            echo "pipeline=$PIPELINE_RESULT scanners=$SCANNER_RESULT"
             exit 1
           fi
 
-      - name: Apply centralized security policies
-        uses: kanedasec/platform-workflows/actions/sgp-policy-from-artifacts@982b33599120d5a306c2878c57164aeead6f674e
+      - name: Apply online bypasses or strict offline policy
+        uses: kanedasec/platform-workflows/actions/sgp-policy-from-artifacts@2358c3996ce347e42ee8dfd09e2cba68a74a30bf
         env:
           SGP_MANAGER_API_KEY: ${{ secrets.SGP_MANAGER_API_KEY }}
         with:
