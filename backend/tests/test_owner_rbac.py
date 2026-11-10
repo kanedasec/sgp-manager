@@ -169,9 +169,21 @@ def test_gate_permissions_filter_visibility_and_enforce_owner_scope(client, admi
 def test_regular_user_cannot_manage_access_or_credentials(client, admin_headers):
     appsec = create_owner(client, admin_headers, "AppSec", "appsec")
     headers, _ = provision_scoped_user(client, admin_headers, appsec)
+    credential = client.post(
+        "/api/v1/admin/api-credentials", headers=admin_headers, json={"name": "admin-owned-key"},
+    ).json()
     assert client.get("/api/v1/admin/groups", headers=headers).status_code == 403
     assert client.get("/api/v1/admin/users", headers=headers).status_code == 403
     assert client.get("/api/v1/admin/api-credentials", headers=headers).status_code == 403
+    assert client.get("/api/v1/admin/api-credential-scopes", headers=headers).status_code == 403
+    assert client.post(
+        "/api/v1/admin/api-credentials", headers=headers, json={"name": "denied-key"},
+    ).status_code == 403
+    assert client.put(
+        f"/api/v1/admin/api-credentials/{credential['id']}/scopes",
+        headers=headers,
+        json={"scopes": ["application:manage"]},
+    ).status_code == 403
     assert client.get("/api/v1/admin/audit-logs", headers=headers).status_code == 403
 
 

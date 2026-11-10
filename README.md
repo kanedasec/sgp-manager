@@ -163,7 +163,7 @@ The only published container port is nginx. Do not add a PostgreSQL `ports:` map
 
 ## Pipeline integration
 
-Create an API credential in **Access Management → API Credentials** and copy it immediately. The full value is not recoverable. It defaults to the `policy:read` scope; grant `application:manage` too if the credential also needs to bootstrap new applications from CI/CD (see below).
+Only administrators can create or modify API credentials. In **Access Management → API Credentials**, select the endpoint scopes required by that machine identity and copy the generated key immediately; the full value is not recoverable. The form defaults to `policy:read`. Grant the `application:manage` permission too, or use it by itself, when the credential must manage application registration from CI/CD (see below). An administrator can replace an active credential's scopes later without rotating its raw key; the change takes effect immediately and is audited.
 
 ### Bootstrapping a new application from CI/CD
 
