@@ -22,19 +22,63 @@ class GatePolicySummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ApplicationCriticality(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
+
+
+class OwnerResponse(BaseModel):
+    id: UUID
+    name: str
+    slug: str
+    description: str | None
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ApplicationCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     slug: Slug = Field(min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
+    owner_id: UUID | None = None
+    company: str | None = Field(default=None, min_length=2, max_length=120)
+    criticality: ApplicationCriticality | None = None
     gate_policy_id: UUID
+
+    @field_validator("company")
+    @classmethod
+    def valid_company(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("company must contain at least 2 non-whitespace characters")
+        return value
 
 
 class ApplicationUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=120)
     slug: Slug | None = Field(default=None, min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
+    owner_id: UUID | None = None
+    company: str | None = Field(default=None, min_length=2, max_length=120)
+    criticality: ApplicationCriticality | None = None
     active: bool | None = None
     gate_policy_id: UUID | None = None
+
+    @field_validator("company")
+    @classmethod
+    def valid_company(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("company must contain at least 2 non-whitespace characters")
+        return value
 
 
 class ApplicationResponse(BaseModel):
@@ -42,6 +86,10 @@ class ApplicationResponse(BaseModel):
     name: str
     slug: str
     description: str | None
+    owner_id: UUID | None
+    owner: OwnerResponse | None
+    company: str | None
+    criticality: ApplicationCriticality | None
     gate_policy_id: UUID
     gate_policy: GatePolicySummary
     active: bool
@@ -61,17 +109,6 @@ class OwnerUpdate(BaseModel):
     slug: Slug | None = Field(default=None, min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
     active: bool | None = None
-
-
-class OwnerResponse(BaseModel):
-    id: UUID
-    name: str
-    slug: str
-    description: str | None
-    active: bool
-    created_at: datetime
-    updated_at: datetime
-    model_config = ConfigDict(from_attributes=True)
 
 
 class GateCreate(BaseModel):

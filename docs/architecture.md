@@ -28,7 +28,7 @@ The backend is separated into HTTP routes (`api`), input/output contracts (`sche
 - `OwnerLabel`: reusable authorization boundary such as AppSec, Architecture, or Quality. Labels are disabled rather than deleted.
 - `AccessGroup`: administrator-managed collection assigned to users. Active groups grant additive permissions.
 - `GroupPermission`: normalized `(action, resource, owner)` grant. A null owner represents the global `:all` scope.
-- `Application`: stable unique slug used by pipelines and one required reusable gate-policy assignment; deactivation preserves history and prevents pipeline discovery.
+- `Application`: stable unique slug used by pipelines, one required reusable gate-policy assignment, and optional owner, company, and business-criticality metadata; deactivation preserves history and prevents pipeline discovery.
 - `Gate`: stable unique slug for a security control, required owner, policy-authoring severity defaults, and active flag.
 - `GatePolicy`: reusable named security standard assigned to one or more applications.
 - `GatePolicyGate`: ordered gate membership and the policy-specific blocking severity set. A gate appears at most once per policy and positions are contiguous at the API boundary.
@@ -39,6 +39,8 @@ The backend is separated into HTTP routes (`api`), input/output contracts (`sche
 - `AuditLog`: actor, event, target, timestamp, sanitized metadata, and source IP. There is no administrative delete API.
 
 All primary keys are UUIDs. All timestamps use timezone-aware database columns and API values are normalized to UTC. The frontend renders dates using the browser locale.
+
+Migration `20261111_0013` adds nullable application owner, company, and criticality fields. The owner is a restricted foreign key to the existing owner-label catalog, while criticality is constrained to `low`, `medium`, `high`, or `critical`. Existing rows and CI-created applications remain valid with null metadata, so the pipeline bootstrap and enforcement contracts are unchanged; administrators can complete the metadata later in the portal.
 
 Migration `20261109_0012` adds the empty `custom_policies` table with owner and creator foreign keys, owner-scoped slug uniqueness, format validation, source and canonical JSON columns, active state, and timezone-aware timestamps. Because the domain is new and deliberately separate from gate enforcement, no existing rows or pipeline contracts are migrated.
 

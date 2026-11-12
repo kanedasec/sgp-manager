@@ -113,18 +113,30 @@ class GroupPermission(Base):
 
 class Application(Base):
     __tablename__ = "applications"
+    __table_args__ = (
+        CheckConstraint(
+            "criticality IS NULL OR criticality IN ('low', 'medium', 'high', 'critical')",
+            name="ck_application_criticality",
+        ),
+    )
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     gate_policy_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("gate_policies.id", ondelete="RESTRICT"), index=True
     )
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("owner_labels.id", ondelete="RESTRICT"), index=True
+    )
     name: Mapped[str] = mapped_column(String(120))
     slug: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text)
+    company: Mapped[str | None] = mapped_column(String(120))
+    criticality: Mapped[str | None] = mapped_column(String(16))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     policies: Mapped[list["BypassPolicy"]] = relationship(back_populates="application")
     gate_policy: Mapped["GatePolicy"] = relationship(back_populates="applications", lazy="joined")
+    owner: Mapped[OwnerLabel | None] = relationship(lazy="joined")
 
 
 class Gate(Base):
