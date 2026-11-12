@@ -1,4 +1,4 @@
-import { AppWindow, Edit3, Plus, Power, Search, ShieldCheck, Trash2, Workflow } from 'lucide-react'
+import { AppWindow, Building2, Edit3, Plus, Power, Search, ShieldCheck, Trash2, Workflow } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
@@ -24,12 +24,20 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
     setLoading(true)
     try {
       const requests: Promise<unknown>[] = [api<Entity[]>(`/api/v1/admin/${kind}`)]
-      if (applicationMode && user?.role === 'ADMIN') requests.push(api<GatePolicy[]>('/api/v1/admin/gate-policies'))
-      if (!applicationMode) requests.push(api<Owner[]>('/api/v1/admin/owner-labels'))
-      const [entities, supporting] = await Promise.all(requests)
-      setItems(entities as Entity[])
-      if (applicationMode && user?.role === 'ADMIN') setGatePolicies(supporting as GatePolicy[])
-      if (!applicationMode) setOwners(supporting as Owner[])
+      if (applicationMode && user?.role === 'ADMIN') {
+        requests.push(api<GatePolicy[]>('/api/v1/admin/gate-policies'))
+        requests.push(api<Owner[]>('/api/v1/admin/owner-labels'))
+      } else if (!applicationMode) {
+        requests.push(api<Owner[]>('/api/v1/admin/owner-labels'))
+      }
+      const results = await Promise.all(requests)
+      setItems(results[0] as Entity[])
+      if (applicationMode && user?.role === 'ADMIN') {
+        setGatePolicies(results[1] as GatePolicy[])
+        setOwners(results[2] as Owner[])
+      } else if (!applicationMode) {
+        setOwners(results[1] as Owner[])
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load records')
     } finally {
@@ -40,7 +48,7 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
   useEffect(() => { void load() }, [kind, user?.role])
 
   const filtered = useMemo(
-    () => items.filter(x => `${x.name} ${x.slug}`.toLowerCase().includes(query.toLowerCase())),
+    () => items.filter(x => `${x.name} ${x.slug} ${x.company || ''} ${x.owner?.name || ''} ${x.criticality || ''}`.toLowerCase().includes(query.toLowerCase())),
     [items, query],
   )
 
@@ -50,7 +58,10 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
     const body = {
       name: form.get('name'), slug: form.get('slug'), description: form.get('description') || null,
       ...(applicationMode
-        ? { gate_policy_id: form.get('gate_policy_id') }
+        ? {
+            gate_policy_id: form.get('gate_policy_id'), owner_id: form.get('owner_id'),
+            company: form.get('company'), criticality: form.get('criticality'),
+          }
         : {
             owner_id: form.get('owner_id'),
             default_blocking_severities: severities.filter(s => form.get(`default_${s}`)),
@@ -101,6 +112,10 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
         <div className="entity-icon">{applicationMode ? <AppWindow /> : <Workflow />}</div>
         <div className="entity-title"><div><h2>{item.name}</h2><code>{item.slug}</code></div><Badge tone={item.active ? 'active' : 'revoked'}>{item.active ? 'ACTIVE' : 'INACTIVE'}</Badge></div>
         {item.owner && <div className="owner-stamp">OWNER / <b>{item.owner.slug}</b></div>}
+        {applicationMode && <div className="application-facts">
+          <span><Building2 size={13} />{item.company || 'Company not set'}</span>
+          <Badge tone={item.criticality || 'revoked'}>{item.criticality ? `${item.criticality} criticality` : 'criticality not set'}</Badge>
+        </div>}
         <p>{item.description || 'No description provided.'}</p>
         {applicationMode && item.gate_policy && <div className="assigned-standard"><ShieldCheck size={15} /><span>GATE POLICY</span><b>{item.gate_policy.name}</b><code>{item.gate_policy.slug}</code></div>}
         {!applicationMode && <div className="gate-defaults"><span>POLICY AUTHORING DEFAULT</span><div className="badge-row">{item.default_blocking_severities?.map(s => <Badge key={s} tone={s}>{s}</Badge>)}</div></div>}
@@ -112,6 +127,9 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
       <label>Name<input name="name" required minLength={2} maxLength={120} defaultValue={editing.name} /></label>
       <label>Identifier / slug<input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" maxLength={100} defaultValue={editing.slug} placeholder="payment-api" /></label>
       {applicationMode && <label>Gate policy<select name="gate_policy_id" required defaultValue={editing.gate_policy_id || ''}><option value="" disabled>Select reusable security standard</option>{gatePolicies.filter(policy => policy.active || policy.id === editing.gate_policy_id).map(policy => <option key={policy.id} value={policy.id}>{policy.name} — {policy.gates.length} gates</option>)}</select><span className="field-help">CI resolves this assignment from SGP Manager; the repository cannot choose its own policy.</span></label>}
+      {applicationMode && <label>Owner<select name="owner_id" required defaultValue={editing.owner_id || ''}><option value="" disabled>Select responsible owner</option>{owners.map(owner => <option key={owner.id} value={owner.id}>{owner.name} — {owner.slug}</option>)}</select></label>}
+      {applicationMode && <label>Company<input name="company" required minLength={2} maxLength={120} defaultValue={editing.company || ''} placeholder="Acme Corporation" /></label>}
+      {applicationMode && <label>Criticality<select name="criticality" required defaultValue={editing.criticality || ''}><option value="" disabled>Select business criticality</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select><span className="field-help">Business impact classification for this application.</span></label>}
       {!applicationMode && <label>Owner<select name="owner_id" required defaultValue={editing.owner_id || ''}><option value="" disabled>Select owner</option>{owners.filter(owner => editing.id ? can('gates', 'edit', owner.slug) : can('gates', 'create', owner.slug)).map(owner => <option key={owner.id} value={owner.id}>{owner.name} — {owner.slug}</option>)}</select></label>}
       <label>Description<textarea name="description" maxLength={2000} rows={4} defaultValue={editing.description || ''} /></label>
       {!applicationMode && <fieldset className="severity-picker"><legend>Policy authoring defaults</legend>{severities.map(s => <label key={s} className={`severity-option severity-${s}`}><input type="checkbox" name={`default_${s}`} defaultChecked={editing.id ? editing.default_blocking_severities?.includes(s) : true} /><span>{s.toUpperCase()}</span></label>)}<p className="field-help">Used to prefill a gate when an administrator adds it to a policy. Existing policies keep their own values.</p></fieldset>}

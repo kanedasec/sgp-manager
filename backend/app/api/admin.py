@@ -71,6 +71,15 @@ def require_active_gate_policy(db: Session, policy_id: UUID) -> GatePolicy:
     return policy
 
 
+def require_active_owner(db: Session, owner_id: UUID | None) -> OwnerLabel | None:
+    if owner_id is None:
+        return None
+    owner = db.get(OwnerLabel, owner_id)
+    if not owner or not owner.active:
+        raise HTTPException(400, "Owner does not exist or is inactive")
+    return owner
+
+
 @router.get("/owner-labels", response_model=list[OwnerResponse])
 def list_owner_labels(db: Session = Depends(get_db), user: User = Depends(current_user)):
     require_any_permission(user, {"gates", "policies", "custom-policies"})
@@ -86,7 +95,9 @@ def list_applications(
     query = select(Application)
     if search:
         term = f"%{search.strip()}%"
-        query = query.where(or_(Application.name.ilike(term), Application.slug.ilike(term)))
+        query = query.where(or_(
+            Application.name.ilike(term), Application.slug.ilike(term), Application.company.ilike(term),
+        ))
     if not include_inactive:
         query = query.where(Application.active.is_(True))
     return list(db.scalars(query.order_by(Application.name)))
@@ -95,13 +106,17 @@ def list_applications(
 @router.post("/applications", response_model=ApplicationResponse, status_code=201)
 def create_application(data: ApplicationCreate, request: Request, db: Session = Depends(get_db), user: User = Depends(admin_user)):
     policy = require_active_gate_policy(db, data.gate_policy_id)
+    owner = require_active_owner(db, data.owner_id)
     item = Application(
         id=uuid4(), name=data.name.strip(), slug=data.slug, description=data.description,
-        gate_policy_id=policy.id,
+        gate_policy_id=policy.id, owner_id=owner.id if owner else None,
+        company=data.company.strip() if data.company else None,
+        criticality=data.criticality.value if data.criticality else None,
     )
     db.add(item)
     record_audit(db, "APPLICATION_CREATED", "USER", user.id, "APPLICATION", item.id, {
         "slug": item.slug, "gate_policy": policy.slug,
+        "owner": owner.slug if owner else None, "company": item.company, "criticality": item.criticality,
     }, source_ip(request))
     commit_unique(db, "Application identifier already exists")
     db.refresh(item)
@@ -126,6 +141,9 @@ def update_application(item_id: UUID, data: ApplicationUpdate, request: Request,
     policy = None
     if "gate_policy_id" in changes:
         policy = require_active_gate_policy(db, changes["gate_policy_id"])
+    owner = None
+    if "owner_id" in changes:
+        owner = require_active_owner(db, changes["owner_id"])
     if changes.get("active") is True and "gate_policy_id" not in changes:
         require_active_gate_policy(db, item.gate_policy_id)
     for key, value in changes.items():
@@ -133,6 +151,8 @@ def update_application(item_id: UUID, data: ApplicationUpdate, request: Request,
     metadata = {"fields": list(changes)}
     if policy:
         metadata["gate_policy"] = policy.slug
+    if "owner_id" in changes:
+        metadata["owner"] = owner.slug if owner else None
     record_audit(db, "APPLICATION_UPDATED", "USER", user.id, "APPLICATION", item.id, metadata, source_ip(request))
     commit_unique(db, "Application identifier already exists")
     db.refresh(item)
