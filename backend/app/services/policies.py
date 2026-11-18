@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models import Application, BypassPolicy, BypassPolicyGate, Gate, OwnerLabel, User
 from app.repositories.policies import overlapping_policy
 from app.schemas.admin import PolicyCreate, PolicyGateInput, PolicyGateResponse, PolicyResponse
+from app.services.access import require_bypass_window
 from app.services.audit import record_audit
 
 
@@ -98,6 +99,7 @@ def create_policy(db: Session, data: PolicyCreate, user: User, source_ip: str | 
     owner = db.get(OwnerLabel, data.owner_id)
     if not owner or not owner.active:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Owner does not exist or is inactive")
+    require_bypass_window(user, "create", owner.id, aware(valid_from), aware(data.expires_at), now)
     resolved_gates = validate_gates(
         db, data.application_id, data.owner_id, data.gates, valid_from, data.expires_at
     )

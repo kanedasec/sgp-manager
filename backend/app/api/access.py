@@ -36,7 +36,8 @@ def group_query():
 def serialize_group(group: AccessGroup) -> AccessGroupResponse:
     return AccessGroupResponse(
         id=group.id, name=group.name, slug=group.slug, description=group.description, active=group.active,
-        permissions=sorted(permission_name(item) for item in group.permissions), user_count=len(group.users),
+        permissions=sorted(permission_name(item) for item in group.permissions),
+        max_bypass_days=group.max_bypass_days, user_count=len(group.users),
         created_at=group.created_at, updated_at=group.updated_at,
     )
 
@@ -98,12 +99,14 @@ def create_group(
 ):
     group = AccessGroup(
         id=uuid4(), name=data.name.strip(), slug=data.slug, description=data.description, active=True,
+        max_bypass_days=data.max_bypass_days,
     )
     replace_group_permissions(db, group, data.permissions)
     db.add(group)
     record_audit(
         db, "ACCESS_GROUP_CREATED", "USER", actor.id, "ACCESS_GROUP", group.id,
-        {"slug": group.slug, "permissions": data.permissions}, source_ip(request),
+        {"slug": group.slug, "permissions": data.permissions, "max_bypass_days": data.max_bypass_days},
+        source_ip(request),
     )
     commit_unique(db, "Group slug or permission already exists")
     group = db.scalar(group_query().where(AccessGroup.id == group.id))
@@ -127,10 +130,10 @@ def update_group(
     audit_fields = list(changes)
     if permissions is not None:
         audit_fields.append("permissions")
-    record_audit(
-        db, "ACCESS_GROUP_UPDATED", "USER", actor.id, "ACCESS_GROUP", group.id,
-        {"fields": audit_fields, "permissions": permissions if permissions is not None else None}, source_ip(request),
-    )
+    metadata = {"fields": audit_fields, "permissions": permissions if permissions is not None else None}
+    if "max_bypass_days" in changes:
+        metadata["max_bypass_days"] = changes["max_bypass_days"]
+    record_audit(db, "ACCESS_GROUP_UPDATED", "USER", actor.id, "ACCESS_GROUP", group.id, metadata, source_ip(request))
     commit_unique(db, "Group slug or permission already exists")
     group = db.scalar(group_query().where(AccessGroup.id == group.id))
     return serialize_group(group)

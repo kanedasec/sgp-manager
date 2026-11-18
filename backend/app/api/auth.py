@@ -26,7 +26,7 @@ from app.schemas.auth import (
     MfaEnrollResponse, MfaVerifyRequest, UserResponse,
 )
 from app.services.audit import record_audit
-from app.services.access import effective_permissions
+from app.services.access import bypass_limits_by_scope, effective_permissions
 from app.services.oidc_users import find_or_provision_user
 
 
@@ -49,6 +49,7 @@ def user_response(user: User) -> UserResponse:
     return UserResponse(
         id=user.id, username=user.username, display_name=user.display_name, email=user.email, role=user.role.value,
         groups=sorted(group.slug for group in user.groups if group.active), permissions=effective_permissions(user),
+        bypass_max_days=bypass_limits_by_scope(user),
         must_change_password=user.must_change_password, auth_provider=user.auth_provider.value,
         mfa_enabled=user.mfa_enabled,
     )

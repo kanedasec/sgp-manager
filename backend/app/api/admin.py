@@ -27,7 +27,9 @@ from app.schemas.admin import (
     UserAdminCreate, UserAdminResponse, UserAdminUpdate,
 )
 from app.services.audit import record_audit
-from app.services.access import has_permission, permitted_owner_ids, require_any_permission, require_permission
+from app.services.access import (
+    has_permission, permitted_owner_ids, require_any_permission, require_bypass_window, require_permission,
+)
 from app.services.gate_policies import (
     ensure_default_gate_policy, gate_policy_query, get_gate_policy, replace_policy_gates,
     serialize_gate_policy,
@@ -513,8 +515,14 @@ def update_policy(policy_id: UUID, data: PolicyUpdate, request: Request, db: Ses
         require_permission(user, "policies", "edit", target_owner_id)
     new_start = changes.get("valid_from", policy.valid_from)
     new_expiry = changes.get("expires_at", policy.expires_at)
-    if aware(new_expiry) <= datetime.now(UTC) or aware(new_expiry) <= aware(new_start):
+    now = datetime.now(UTC)
+    if aware(new_expiry) <= now or aware(new_expiry) <= aware(new_start):
         raise HTTPException(400, "Invalid policy validity window")
+    if {"valid_from", "expires_at", "owner_id"} & changes.keys():
+        # Re-checked only when the window or owner changes, so a limited
+        # editor can still correct the justification or gates of a longer
+        # policy an administrator approved, but can never lengthen one.
+        require_bypass_window(user, "edit", target_owner_id, aware(new_start), aware(new_expiry), now)
     requested_gates = data.gates if "gates" in changes else None
     if requested_gates is None:
         from app.schemas.admin import PolicyGateInput

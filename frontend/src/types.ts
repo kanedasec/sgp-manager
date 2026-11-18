@@ -27,5 +27,5 @@ export type Audit = { id: string; event_type: string; actor_type: string; actor_
 export type DashboardData = { applications: number; gates: number; active_bypasses: number; expiring_soon: number; recently_expired: number; expiring_policies: Policy[] }
 export type GroupSummary = { id: string; name: string; slug: string; active: boolean }
 export type AdminUser = { id: string; username: string; display_name: string; email: string; role: string; active: boolean; created_at: string; updated_at: string; groups: GroupSummary[] }
-export type AccessGroup = { id: string; name: string; slug: string; description?: string | null; active: boolean; permissions: string[]; user_count: number; created_at: string; updated_at: string }
+export type AccessGroup = { id: string; name: string; slug: string; description?: string | null; active: boolean; permissions: string[]; max_bypass_days: number | null; user_count: number; created_at: string; updated_at: string }
 export type AvailableRoles = { roles: string[]; actions: string[]; resources: string[] }

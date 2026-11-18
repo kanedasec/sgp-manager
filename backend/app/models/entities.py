@@ -80,11 +80,21 @@ class OwnerLabel(Base):
 
 class AccessGroup(Base):
     __tablename__ = "access_groups"
+    __table_args__ = (
+        CheckConstraint(
+            "max_bypass_days IS NULL OR (max_bypass_days >= 1 AND max_bypass_days <= 3650)",
+            name="ck_access_group_max_bypass_days",
+        ),
+    )
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(120))
     slug: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Longest bypass window this group's bypass-policy grants authorize, in
+    # days. NULL means no group-level limit. See
+    # app.services.access.require_bypass_window for how limits combine.
+    max_bypass_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     users: Mapped[list[User]] = relationship(

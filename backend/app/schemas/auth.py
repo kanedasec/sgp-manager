@@ -22,6 +22,13 @@ class UserResponse(BaseModel):
     role: str
     groups: list[str] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
+    bypass_max_days: dict[str, int | None] = Field(
+        default_factory=dict,
+        description=(
+            "Bypass-creation limit in days per permission scope (owner slug or 'all'); null = no limit. "
+            "Advisory for the portal; the server enforces the limit on every bypass write."
+        ),
+    )
     must_change_password: bool = False
     auth_provider: str = "LOCAL"
     mfa_enabled: bool = False
