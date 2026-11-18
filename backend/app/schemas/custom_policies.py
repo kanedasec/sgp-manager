@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.schemas.common import Slug
-from app.services.custom_policies import renderable_formats
+from app.services.custom_policies import MAX_POLICY_BYTES, renderable_formats
 
 
 PolicyFormat = Literal["json", "yaml", "toml"]
@@ -26,7 +26,7 @@ class CustomPolicyCreate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     owner_id: UUID
     format: PolicyFormat
-    document: str = Field(min_length=2, max_length=65536)
+    document: str = Field(min_length=2, max_length=MAX_POLICY_BYTES)
 
 
 class CustomPolicyUpdate(BaseModel):
@@ -34,7 +34,7 @@ class CustomPolicyUpdate(BaseModel):
     slug: Slug | None = Field(default=None, min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
     format: PolicyFormat | None = None
-    document: str | None = Field(default=None, min_length=2, max_length=65536)
+    document: str | None = Field(default=None, min_length=2, max_length=MAX_POLICY_BYTES)
     active: bool | None = None
 
 

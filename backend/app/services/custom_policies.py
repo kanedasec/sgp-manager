@@ -8,7 +8,7 @@ import yaml
 from fastapi import HTTPException, Response, status
 
 
-MAX_POLICY_BYTES = 65536
+MAX_POLICY_BYTES = 256 * 1024
 MAX_POLICY_DEPTH = 32
 MAX_POLICY_NODES = 5000
 

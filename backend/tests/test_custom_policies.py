@@ -1,5 +1,7 @@
 import pytest
 
+from app.services.custom_policies import MAX_POLICY_BYTES
+
 
 def create_owner(client, headers, name, slug):
     response = client.post(
@@ -72,6 +74,32 @@ def test_admin_creates_and_updates_json_and_yaml_custom_policies(client, admin_h
     gate_policies = client.get("/api/v1/admin/gate-policies", headers=admin_headers)
     assert gate_policies.status_code == 200
     assert all("parsed_document" not in item for item in gate_policies.json())
+
+
+def test_custom_policy_accepts_256_kib_and_rejects_larger_utf8_documents(
+    client, admin_headers, owner,
+):
+    prefix = '{"payload":"'
+    suffix = '"}'
+    exact_limit = prefix + "a" * (MAX_POLICY_BYTES - len(prefix) - len(suffix)) + suffix
+    assert len(exact_limit.encode("utf-8")) == MAX_POLICY_BYTES
+
+    accepted = create_policy(
+        client, admin_headers, owner, "maximum-size-policy", document=exact_limit,
+    )
+    assert accepted.status_code == 201, accepted.text
+    assert accepted.json()["document"] == exact_limit
+
+    # This remains below Pydantic's character limit but exceeds the
+    # authoritative UTF-8 byte limit because each value character is two bytes.
+    multibyte_oversize = prefix + "é" * (MAX_POLICY_BYTES // 2) + suffix
+    assert len(multibyte_oversize) < MAX_POLICY_BYTES
+    assert len(multibyte_oversize.encode("utf-8")) > MAX_POLICY_BYTES
+    rejected = create_policy(
+        client, admin_headers, owner, "oversize-policy", document=multibyte_oversize,
+    )
+    assert rejected.status_code == 422
+    assert f"exceeds {MAX_POLICY_BYTES} UTF-8 bytes" in rejected.json()["detail"]
 
 
 @pytest.mark.parametrize(
