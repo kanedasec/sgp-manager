@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.services.custom_policies import MAX_POLICY_BYTES
@@ -100,6 +102,18 @@ def test_custom_policy_accepts_256_kib_and_rejects_larger_utf8_documents(
     )
     assert rejected.status_code == 422
     assert f"exceeds {MAX_POLICY_BYTES} UTF-8 bytes" in rejected.json()["detail"]
+
+
+def test_custom_policy_has_no_value_count_limit(client, admin_headers, owner):
+    values = list(range(6000))
+    document = json.dumps({"values": values})
+    assert len(document.encode("utf-8")) < MAX_POLICY_BYTES
+
+    created = create_policy(
+        client, admin_headers, owner, "many-values-policy", document=document,
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["parsed_document"]["values"] == values
 
 
 @pytest.mark.parametrize(
