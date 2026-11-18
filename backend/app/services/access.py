@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
@@ -94,6 +95,84 @@ def require_permission(user: User, resource: str, action: str, owner_id: UUID) -
             status.HTTP_403_FORBIDDEN,
             f"Missing permission {action}-{resource} for this owner",
         )
+
+
+MAX_BYPASS_DAYS_LIMIT = 3650
+
+
+def bypass_duration_limit(user: User, action: str, owner_id: UUID) -> int | None:
+    """Most permissive group limit, in days, for ``action``-policies on ``owner_id``.
+
+    Mirrors the union-of-groups permission model: among the user's active
+    groups that grant this bypass action for the owner (or ``:all``), a group
+    without a limit makes the user unlimited; otherwise the largest limit
+    wins. Administrators are unlimited break-glass users. A user with no
+    matching grant is denied outright (fail closed) rather than treated as
+    unlimited.
+    """
+    if is_admin(user):
+        return None
+    limits: list[int] = []
+    for group in user.groups:
+        if not group.active:
+            continue
+        grants = any(
+            permission.resource == "policies" and permission.action == action
+            and (permission.owner_id is None or permission.owner_id == owner_id)
+            for permission in group.permissions
+        )
+        if not grants:
+            continue
+        if group.max_bypass_days is None:
+            return None
+        limits.append(group.max_bypass_days)
+    if not limits:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"Missing permission {action}-policies for this owner")
+    return max(limits)
+
+
+def require_bypass_window(
+    user: User, action: str, owner_id: UUID, valid_from: datetime, expires_at: datetime, now: datetime,
+) -> None:
+    """Reject a bypass window longer than the user's limit for this owner.
+
+    The window is measured from the earlier of ``valid_from`` and ``now``:
+    a past start counts in full (so repeated edits cannot extend a running
+    bypass past the limit) and a future start cannot push the expiry beyond
+    the limit from today.
+    """
+    limit = bypass_duration_limit(user, action, owner_id)
+    if limit is None:
+        return
+    if expires_at - min(valid_from, now) > timedelta(days=limit):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Bypass window exceeds the {limit}-day maximum your groups allow for this owner",
+        )
+
+
+def bypass_limits_by_scope(user: User, action: str = "create") -> dict[str, int | None]:
+    """Per-scope bypass limits for the portal (owner slug or ``all``).
+
+    The portal combines the owner's entry with ``all`` using the same
+    most-permissive rule as :func:`bypass_duration_limit`, which remains the
+    authoritative server-side check.
+    """
+    if is_admin(user):
+        return {"all": None}
+    result: dict[str, int | None] = {}
+    for group in user.groups:
+        if not group.active:
+            continue
+        for permission in group.permissions:
+            if permission.resource != "policies" or permission.action != action:
+                continue
+            scope = permission.owner.slug if permission.owner else "all"
+            if scope in result and result[scope] is None:
+                continue
+            current = result.get(scope, 0)
+            result[scope] = None if group.max_bypass_days is None else max(current or 0, group.max_bypass_days)
+    return result
 
 
 def parse_permissions(db: Session, values: list[str]) -> list[tuple[str, str, OwnerLabel | None]]:

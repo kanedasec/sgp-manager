@@ -12,7 +12,7 @@ from app.core.database import get_db
 from app.core.security import generate_api_key, hash_api_key, hash_password
 from app.core.token_revocation import revoke_all_for_user
 from app.models import (
-    AccessGroup, ApiCredential, Application, AuditLog, BypassPolicy, BypassPolicyGate, Gate, GatePolicy,
+    AccessGroup, ApiCredential, Application, AuditLog, BypassPolicy, BypassPolicyGate, CustomPolicyBinding, Gate, GatePolicy,
     GatePolicyGate, OwnerLabel, User,
 )
 from app.models.entities import UserRole
@@ -27,7 +27,9 @@ from app.schemas.admin import (
     UserAdminCreate, UserAdminResponse, UserAdminUpdate,
 )
 from app.services.audit import record_audit
-from app.services.access import has_permission, permitted_owner_ids, require_any_permission, require_permission
+from app.services.access import (
+    has_permission, permitted_owner_ids, require_any_permission, require_bypass_window, require_permission,
+)
 from app.services.gate_policies import (
     ensure_default_gate_policy, gate_policy_query, get_gate_policy, replace_policy_gates,
     serialize_gate_policy,
@@ -58,6 +60,12 @@ def delete_or_conflict(db, item, conflict_message):
     except IntegrityError:
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, conflict_message) from None
+
+
+def require_no_custom_policy_bindings(db: Session, column, target_id: UUID, label: str) -> None:
+    bound = db.scalar(select(func.count(CustomPolicyBinding.id)).where(column == target_id)) or 0
+    if bound:
+        raise HTTPException(409, f"Remove every custom policy binding for this {label} before deleting it")
 
 
 def require_active_gate_policy(db: Session, policy_id: UUID) -> GatePolicy:
@@ -167,6 +175,7 @@ def delete_application(item_id: UUID, request: Request, db: Session = Depends(ge
     referenced = db.scalar(select(func.count(BypassPolicy.id)).where(BypassPolicy.application_id == item.id)) or 0
     if referenced:
         raise HTTPException(409, "Delete every bypass policy for this application (including revoked/expired history) before deleting it")
+    require_no_custom_policy_bindings(db, CustomPolicyBinding.application_id, item.id, "application")
     record_audit(db, "APPLICATION_DELETED", "USER", user.id, "APPLICATION", item.id, {"slug": item.slug}, source_ip(request))
     delete_or_conflict(db, item, "Application is still referenced by another record")
 
@@ -288,6 +297,7 @@ def delete_gate(item_id: UUID, request: Request, db: Session = Depends(get_db), 
     ) or 0
     if bypassed:
         raise HTTPException(409, "Delete every bypass policy referencing this gate (including revoked/expired history) before deleting it")
+    require_no_custom_policy_bindings(db, CustomPolicyBinding.gate_id, item.id, "gate")
     record_audit(db, "GATE_DELETED", "USER", user.id, "GATE", item.id, {"slug": item.slug}, source_ip(request))
     delete_or_conflict(db, item, "Gate is still referenced by another record")
 
@@ -427,6 +437,7 @@ def delete_gate_policy(policy_id: UUID, request: Request, db: Session = Depends(
     ) or 0
     if referenced:
         raise HTTPException(409, "Reassign or delete every application on this gate policy before deleting it")
+    require_no_custom_policy_bindings(db, CustomPolicyBinding.gate_policy_id, item.id, "gate policy")
     record_audit(db, "GATE_POLICY_DELETED", "USER", user.id, "GATE_POLICY", item.id, {"slug": item.slug}, source_ip(request))
     delete_or_conflict(db, item, "Gate policy is still referenced by another record")
 
@@ -504,8 +515,14 @@ def update_policy(policy_id: UUID, data: PolicyUpdate, request: Request, db: Ses
         require_permission(user, "policies", "edit", target_owner_id)
     new_start = changes.get("valid_from", policy.valid_from)
     new_expiry = changes.get("expires_at", policy.expires_at)
-    if aware(new_expiry) <= datetime.now(UTC) or aware(new_expiry) <= aware(new_start):
+    now = datetime.now(UTC)
+    if aware(new_expiry) <= now or aware(new_expiry) <= aware(new_start):
         raise HTTPException(400, "Invalid policy validity window")
+    if {"valid_from", "expires_at", "owner_id"} & changes.keys():
+        # Re-checked only when the window or owner changes, so a limited
+        # editor can still correct the justification or gates of a longer
+        # policy an administrator approved, but can never lengthen one.
+        require_bypass_window(user, "edit", target_owner_id, aware(new_start), aware(new_expiry), now)
     requested_gates = data.gates if "gates" in changes else None
     if requested_gates is None:
         from app.schemas.admin import PolicyGateInput

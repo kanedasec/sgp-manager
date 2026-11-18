@@ -1,17 +1,20 @@
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import current_user, source_ip
+from app.api.dependencies import admin_user, current_user, source_ip
 from app.core.database import get_db
-from app.models import CustomPolicy, OwnerLabel, User
-from app.schemas.custom_policies import CustomPolicyCreate, CustomPolicyResponse, CustomPolicyUpdate
+from app.models import Application, CustomPolicy, CustomPolicyBinding, Gate, GatePolicy, OwnerLabel, User
+from app.schemas.custom_policies import (
+    CustomPolicyBindingCreate, CustomPolicyBindingResponse, CustomPolicyCreate, CustomPolicyResponse,
+    CustomPolicyUpdate, PolicyFormat,
+)
 from app.services.access import permitted_owner_ids, require_permission
 from app.services.audit import record_audit
-from app.services.custom_policies import InvalidCustomPolicy, parse_custom_policy
+from app.services.custom_policies import InvalidCustomPolicy, parse_custom_policy, policy_file_response
 
 
 router = APIRouter(
@@ -56,7 +59,7 @@ def visible_policy(db: Session, policy_id: UUID, user: User, action: str) -> Cus
 def list_custom_policies(
     owner_id: UUID | None = None,
     include_inactive: bool = True,
-    format: str | None = Query(default=None, pattern="^(json|yaml)$"),
+    format: str | None = Query(default=None, pattern="^(json|yaml|toml)$"),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -154,3 +157,115 @@ def update_custom_policy(
     commit_unique(db)
     db.refresh(item)
     return item
+
+
+@router.get(
+    "/{policy_id}/export",
+    response_class=Response,
+    summary="Download a custom policy as a JSON, YAML, or TOML file",
+)
+def export_custom_policy(
+    policy_id: UUID,
+    format: PolicyFormat = Query(default="json"),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    return policy_file_response(visible_policy(db, policy_id, user, "view"), format)
+
+
+# Bindings decide which applications' pipelines receive a document. A gate or
+# gate-policy binding reaches every application using it, across owner
+# boundaries, so binding management is administrator-only, matching gate
+# policy assignment. Owner-scoped authors still maintain document content.
+BINDING_TARGETS = {
+    "application": (Application, "application_id", "Application"),
+    "gate_policy": (GatePolicy, "gate_policy_id", "Gate policy"),
+    "gate": (Gate, "gate_id", "Gate"),
+}
+
+
+@router.get("/{policy_id}/bindings", response_model=list[CustomPolicyBindingResponse])
+def list_custom_policy_bindings(
+    policy_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_user),
+):
+    item = visible_policy(db, policy_id, user, "view")
+    return list(item.bindings)
+
+
+@router.post(
+    "/{policy_id}/bindings",
+    response_model=CustomPolicyBindingResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_custom_policy_binding(
+    policy_id: UUID,
+    data: CustomPolicyBindingCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_user),
+):
+    item = visible_policy(db, policy_id, user, "edit")
+    model, column, label = BINDING_TARGETS[data.target_type]
+    target = db.get(model, data.target_id)
+    if not target or not target.active:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{label} does not exist or is inactive")
+    binding = CustomPolicyBinding(
+        id=uuid4(),
+        custom_policy_id=item.id,
+        target_type=data.target_type,
+        created_by=user.id,
+        **{column: target.id},
+    )
+    db.add(binding)
+    record_audit(
+        db,
+        "CUSTOM_POLICY_BOUND",
+        "USER",
+        user.id,
+        "CUSTOM_POLICY",
+        item.id,
+        {"slug": item.slug, "owner": item.owner.slug, "target_type": data.target_type, "target": target.slug},
+        source_ip(request),
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"Custom policy is already bound to this {label.lower()}",
+        ) from None
+    db.refresh(binding)
+    return binding
+
+
+@router.delete("/{policy_id}/bindings/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_custom_policy_binding(
+    policy_id: UUID,
+    binding_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_user),
+):
+    item = visible_policy(db, policy_id, user, "edit")
+    binding = db.scalar(select(CustomPolicyBinding).where(
+        CustomPolicyBinding.id == binding_id, CustomPolicyBinding.custom_policy_id == item.id,
+    ))
+    if not binding:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Custom policy binding not found")
+    record_audit(
+        db,
+        "CUSTOM_POLICY_UNBOUND",
+        "USER",
+        user.id,
+        "CUSTOM_POLICY",
+        item.id,
+        {
+            "slug": item.slug, "owner": item.owner.slug,
+            "target_type": binding.target_type, "target": binding.target_slug,
+        },
+        source_ip(request),
+    )
+    db.delete(binding)
+    db.commit()

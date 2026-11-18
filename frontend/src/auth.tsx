@@ -1,9 +1,21 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { api } from './api'
 
-export type SessionUser = { id: string; username: string; display_name: string; email: string; role: string; groups: string[]; permissions: string[]; must_change_password: boolean; auth_provider: string; mfa_enabled: boolean }
+export type SessionUser = { id: string; username: string; display_name: string; email: string; role: string; groups: string[]; permissions: string[]; bypass_max_days?: Record<string, number | null>; must_change_password: boolean; auth_provider: string; mfa_enabled: boolean }
 export type LoginResult = { mfaRequired: false } | { mfaRequired: true; mfaToken: string }
 export type PermissionResource = 'gates' | 'policies' | 'custom-policies'
+// Mirrors app.services.access.bypass_duration_limit (the authoritative
+// server-side check): the most permissive of the owner's and the :all
+// scope wins; null means no limit; undefined means no create grant.
+export const bypassLimitFor = (user: SessionUser | null, ownerSlug: string): number | null | undefined => {
+  const limits = user?.bypass_max_days || {}
+  const values = [limits[ownerSlug], limits.all].filter(value => value !== undefined)
+  if (!values.length) return undefined
+  return values.includes(null) ? null : Math.max(...(values as number[]))
+}
+export const resourceLabels: Record<PermissionResource, string> = {
+  gates: 'Gates', policies: 'Bypass policies', 'custom-policies': 'Custom policies',
+}
 export const hasResourcePermission = (permissions: string[], resource: PermissionResource) =>
   ['view', 'create', 'edit'].some(action => permissions.some(permission => permission.startsWith(`${action}-${resource}:`)))
 type AuthValue = {

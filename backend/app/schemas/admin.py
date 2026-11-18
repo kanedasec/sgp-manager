@@ -358,11 +358,16 @@ API_CREDENTIAL_SCOPE_DEFINITIONS = (
     {
         "scope": "policy:read",
         "name": "Pipeline policy evaluation",
-        "description": "Resolve assigned gate policies, blocking severities, and effective bypasses.",
+        "description": (
+            "Resolve assigned gate policies, blocking severities, effective bypasses, and the custom "
+            "policies bound to an application's pipeline."
+        ),
         "endpoints": [
             "POST /api/v1/policies/evaluate",
             "POST /api/v1/policies/resolve-pipeline",
             "POST /api/v1/policies/evaluate-enforcement",
+            "POST /api/v1/policies/resolve-custom-policies",
+            "POST /api/v1/policies/custom-policy-document",
         ],
     },
     {
@@ -520,6 +525,10 @@ class AccessGroupCreate(BaseModel):
     slug: Slug = Field(min_length=2, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
     permissions: list[str] = Field(default_factory=list, max_length=500)
+    max_bypass_days: int | None = Field(
+        default=None, ge=1, le=3650,
+        description="Longest bypass window this group's bypass-policy roles authorize, in days; null = no limit",
+    )
 
     @field_validator("permissions")
     @classmethod
@@ -536,6 +545,10 @@ class AccessGroupUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     active: bool | None = None
     permissions: list[str] | None = Field(default=None, max_length=500)
+    max_bypass_days: int | None = Field(
+        default=None, ge=1, le=3650,
+        description="Send null to remove the limit; omit to leave it unchanged",
+    )
 
     @field_validator("permissions")
     @classmethod
@@ -555,6 +568,7 @@ class AccessGroupResponse(BaseModel):
     description: str | None
     active: bool
     permissions: list[str]
+    max_bypass_days: int | None
     user_count: int
     created_at: datetime
     updated_at: datetime

@@ -6,8 +6,14 @@ export type GatePolicyGate = { gate_id: string; gate_name: string; gate_slug: st
 export type GatePolicy = { id: string; name: string; slug: string; description?: string | null; active: boolean; gates: GatePolicyGate[]; application_count: number; created_at: string; updated_at: string }
 export type CustomPolicy = {
   id: string; name: string; slug: string; description?: string | null; owner_id: string; owner: Owner;
-  format: 'json' | 'yaml'; document: string; parsed_document: Record<string, unknown>; active: boolean;
-  created_by: string; created_at: string; updated_at: string
+  format: PolicyFormat; document: string; parsed_document: Record<string, unknown>; active: boolean;
+  renderable_formats: PolicyFormat[]; created_by: string; created_at: string; updated_at: string
+}
+export type PolicyFormat = 'json' | 'yaml' | 'toml'
+export type BindingTargetType = 'application' | 'gate_policy' | 'gate'
+export type CustomPolicyBinding = {
+  id: string; custom_policy_id: string; target_type: BindingTargetType; target_id: string; target_slug: string;
+  target_name: string; created_by: string; created_at: string
 }
 export type PolicyGate = { gate_id: string; gate_name: string; gate_slug: string; severities: string[]; finding_scope?: string[] | null }
 export type Policy = {
@@ -21,5 +27,5 @@ export type Audit = { id: string; event_type: string; actor_type: string; actor_
 export type DashboardData = { applications: number; gates: number; active_bypasses: number; expiring_soon: number; recently_expired: number; expiring_policies: Policy[] }
 export type GroupSummary = { id: string; name: string; slug: string; active: boolean }
 export type AdminUser = { id: string; username: string; display_name: string; email: string; role: string; active: boolean; created_at: string; updated_at: string; groups: GroupSummary[] }
-export type AccessGroup = { id: string; name: string; slug: string; description?: string | null; active: boolean; permissions: string[]; user_count: number; created_at: string; updated_at: string }
+export type AccessGroup = { id: string; name: string; slug: string; description?: string | null; active: boolean; permissions: string[]; max_bypass_days: number | null; user_count: number; created_at: string; updated_at: string }
 export type AvailableRoles = { roles: string[]; actions: string[]; resources: string[] }
