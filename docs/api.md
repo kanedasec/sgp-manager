@@ -6,7 +6,7 @@ Only an administrator authenticated with a Bearer JWT can create API credentials
 
 The supported machine scopes are:
 
-- `policy:read`: calls `/policies/evaluate`, `/policies/resolve-pipeline`, and `/policies/evaluate-enforcement`.
+- `policy:read`: calls `/policies/evaluate`, `/policies/resolve-pipeline`, `/policies/evaluate-enforcement`, `/policies/resolve-custom-policies`, and `/policies/custom-policy-document`.
 - `application:manage`: the application-management permission. It calls `/policies/applications/ensure`, which may create a missing application under an explicitly requested active gate policy but never reassigns an existing application.
 
 At least one scope is required. Scope replacement is immediate and audited; it does not rotate or reveal the raw API key. Revoked credentials cannot be edited. API credentials never inherit the administrator role and cannot call admin endpoints.
@@ -53,6 +53,97 @@ positions, and all non-2xx responses must stop the workflow before scanners run.
 
 The ordering is an auditable policy/display order. Independent scanner jobs may
 run in parallel after the preflight response has been validated.
+
+### Custom policies in the pipeline resolution
+
+The response also carries a top-level `custom_policies` array: the active custom
+policies bound to the application, to its assigned gate policy, or to a gate in
+that policy. A gate binding applies only when the application's policy runs that
+gate. Inactive documents are excluded. The `gates` entries are unchanged.
+
+```json
+"custom_policies": [
+  {
+    "key": "appsec/semgrep-tuning",
+    "owner": "appsec",
+    "slug": "semgrep-tuning",
+    "name": "Semgrep Tuning",
+    "source_format": "toml",
+    "digest": "sha256:9f2c…",
+    "updated_at": "2026-11-18T12:00:00Z",
+    "sources": [
+      {"type": "gate_policy", "target": "crown-jewels"},
+      {"type": "gate", "target": "sast"}
+    ],
+    "gates": ["sast"],
+    "format": null,
+    "content": null,
+    "document": null
+  }
+]
+```
+
+By default only references are returned, which keeps the response well under the
+64 KiB limit that pinned `platform-workflows` consumers enforce. To embed the
+documents, send `"custom_policy_format": "json" | "yaml" | "toml"`. Each entry
+then includes `format`, the rendered `content`, and the canonical `document`.
+Consumers that opt in must raise their response size limit, because each
+document can be up to 64 KiB. If a bound document cannot be rendered in the
+requested format (TOML has no `null` and only 64-bit integers), the request
+fails with `503` instead of returning a partial set. `digest` is a
+format-independent SHA-256 of the canonical JSON document.
+
+This lets the preflight job, which already holds the API credential, hand
+custom policies to scanner jobs as artifacts. Scanner jobs never need the
+credential.
+
+## Retrieve bound custom policies
+
+```http
+POST /api/v1/policies/resolve-custom-policies
+Content-Type: application/json
+X-API-Key: sec_...
+```
+
+```json
+{"application": "payment-api", "gate": "sast", "format": "toml"}
+```
+
+`gate` and `format` are optional (`format` defaults to `json`). The response holds
+`application`, `gate_policy`, `gate`, `format`, `generated_at`, and
+`custom_policies` entries shaped as above, always with `content` and `document`.
+With `gate`, the result is the application- and gate-policy-wide policies plus
+the policies bound to that gate. A gate outside the application's pipeline
+returns `404`. Application and gate-policy validation is identical to
+`resolve-pipeline` (`404` unknown/inactive application, `503` invalid policy).
+
+## Download one custom policy file
+
+```http
+POST /api/v1/policies/custom-policy-document
+Content-Type: application/json
+X-API-Key: sec_...
+```
+
+```json
+{"application": "payment-api", "owner": "appsec", "policy": "semgrep-tuning", "format": "toml"}
+```
+
+Returns the raw file with `Content-Type: application/toml` (or
+`application/json` / `application/yaml`),
+`Content-Disposition: attachment; filename="semgrep-tuning.toml"`,
+`Cache-Control: no-store`, and an `X-Policy-Digest` header. A document requested
+in its authoring format is returned exactly as written, comments included. A
+policy that is inactive, unbound from this application's pipeline, or
+nonexistent returns the same `404`, so a credential cannot enumerate unbound
+drafts. A format the document cannot be rendered in returns `422`.
+
+```bash
+curl -fsS -X POST "$SGP_URL/api/v1/policies/custom-policy-document" \
+  -H "X-API-Key: $SGP_MANAGER_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"application":"payment-api","owner":"appsec","policy":"semgrep-tuning","format":"toml"}' \
+  -o semgrep-tuning.toml
+```
 
 ## Resolve final gate enforcement
 

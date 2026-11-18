@@ -358,11 +358,16 @@ API_CREDENTIAL_SCOPE_DEFINITIONS = (
     {
         "scope": "policy:read",
         "name": "Pipeline policy evaluation",
-        "description": "Resolve assigned gate policies, blocking severities, and effective bypasses.",
+        "description": (
+            "Resolve assigned gate policies, blocking severities, effective bypasses, and the custom "
+            "policies bound to an application's pipeline."
+        ),
         "endpoints": [
             "POST /api/v1/policies/evaluate",
             "POST /api/v1/policies/resolve-pipeline",
             "POST /api/v1/policies/evaluate-enforcement",
+            "POST /api/v1/policies/resolve-custom-policies",
+            "POST /api/v1/policies/custom-policy-document",
         ],
     },
     {

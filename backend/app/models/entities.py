@@ -198,12 +198,12 @@ class GatePolicyGate(Base):
 
 
 class CustomPolicy(Base):
-    """Owner-scoped JSON/YAML document, separate from gate enforcement."""
+    """Owner-scoped JSON/YAML/TOML document, separate from gate enforcement."""
 
     __tablename__ = "custom_policies"
     __table_args__ = (
         UniqueConstraint("owner_id", "slug", name="uq_custom_policy_owner_slug"),
-        CheckConstraint("format IN ('json', 'yaml')", name="ck_custom_policy_format"),
+        CheckConstraint("format IN ('json', 'yaml', 'toml')", name="ck_custom_policy_format"),
     )
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     owner_id: Mapped[uuid.UUID] = mapped_column(
@@ -221,6 +221,72 @@ class CustomPolicy(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     owner: Mapped[OwnerLabel] = relationship(lazy="joined")
     creator: Mapped[User] = relationship()
+    bindings: Mapped[list["CustomPolicyBinding"]] = relationship(
+        back_populates="custom_policy", order_by="CustomPolicyBinding.created_at",
+    )
+
+
+CUSTOM_POLICY_BINDING_TARGETS = ("application", "gate_policy", "gate")
+
+
+class CustomPolicyBinding(Base):
+    """Administrator-approved association of a custom policy with one target.
+
+    Exactly one of ``application_id``, ``gate_policy_id`` or ``gate_id`` is
+    set, matching ``target_type``. Pipeline resolution delivers a bound,
+    active custom policy to an application when it is bound to that
+    application, to the application's assigned gate policy, or to an active
+    gate selected by that gate policy. Bindings never change gate
+    enforcement or blocking severities.
+    """
+
+    __tablename__ = "custom_policy_bindings"
+    __table_args__ = (
+        CheckConstraint(
+            "(target_type = 'application' AND application_id IS NOT NULL"
+            " AND gate_policy_id IS NULL AND gate_id IS NULL)"
+            " OR (target_type = 'gate_policy' AND gate_policy_id IS NOT NULL"
+            " AND application_id IS NULL AND gate_id IS NULL)"
+            " OR (target_type = 'gate' AND gate_id IS NOT NULL"
+            " AND application_id IS NULL AND gate_policy_id IS NULL)",
+            name="ck_custom_policy_binding_target",
+        ),
+        UniqueConstraint("custom_policy_id", "application_id", name="uq_custom_policy_binding_application"),
+        UniqueConstraint("custom_policy_id", "gate_policy_id", name="uq_custom_policy_binding_gate_policy"),
+        UniqueConstraint("custom_policy_id", "gate_id", name="uq_custom_policy_binding_gate"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    custom_policy_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("custom_policies.id", ondelete="RESTRICT"), index=True
+    )
+    target_type: Mapped[str] = mapped_column(String(16))
+    application_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("applications.id", ondelete="RESTRICT"), index=True
+    )
+    gate_policy_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("gate_policies.id", ondelete="RESTRICT"), index=True
+    )
+    gate_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("gates.id", ondelete="RESTRICT"), index=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    custom_policy: Mapped[CustomPolicy] = relationship(back_populates="bindings")
+    application: Mapped[Application | None] = relationship(lazy="joined")
+    gate_policy: Mapped[GatePolicy | None] = relationship(lazy="joined")
+    gate: Mapped[Gate | None] = relationship(lazy="joined")
+
+    @property
+    def target_slug(self) -> str | None:
+        target = self.application or self.gate_policy or self.gate
+        return target.slug if target else None
+
+    @property
+    def target_name(self) -> str | None:
+        target = self.application or self.gate_policy or self.gate
+        return target.name if target else None
+
+    @property
+    def target_id(self) -> uuid.UUID | None:
+        return self.application_id or self.gate_policy_id or self.gate_id
 
 
 class BypassPolicy(Base):

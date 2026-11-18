@@ -12,7 +12,7 @@ from app.core.database import get_db
 from app.core.security import generate_api_key, hash_api_key, hash_password
 from app.core.token_revocation import revoke_all_for_user
 from app.models import (
-    AccessGroup, ApiCredential, Application, AuditLog, BypassPolicy, BypassPolicyGate, Gate, GatePolicy,
+    AccessGroup, ApiCredential, Application, AuditLog, BypassPolicy, BypassPolicyGate, CustomPolicyBinding, Gate, GatePolicy,
     GatePolicyGate, OwnerLabel, User,
 )
 from app.models.entities import UserRole
@@ -58,6 +58,12 @@ def delete_or_conflict(db, item, conflict_message):
     except IntegrityError:
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, conflict_message) from None
+
+
+def require_no_custom_policy_bindings(db: Session, column, target_id: UUID, label: str) -> None:
+    bound = db.scalar(select(func.count(CustomPolicyBinding.id)).where(column == target_id)) or 0
+    if bound:
+        raise HTTPException(409, f"Remove every custom policy binding for this {label} before deleting it")
 
 
 def require_active_gate_policy(db: Session, policy_id: UUID) -> GatePolicy:
@@ -167,6 +173,7 @@ def delete_application(item_id: UUID, request: Request, db: Session = Depends(ge
     referenced = db.scalar(select(func.count(BypassPolicy.id)).where(BypassPolicy.application_id == item.id)) or 0
     if referenced:
         raise HTTPException(409, "Delete every bypass policy for this application (including revoked/expired history) before deleting it")
+    require_no_custom_policy_bindings(db, CustomPolicyBinding.application_id, item.id, "application")
     record_audit(db, "APPLICATION_DELETED", "USER", user.id, "APPLICATION", item.id, {"slug": item.slug}, source_ip(request))
     delete_or_conflict(db, item, "Application is still referenced by another record")
 
@@ -288,6 +295,7 @@ def delete_gate(item_id: UUID, request: Request, db: Session = Depends(get_db), 
     ) or 0
     if bypassed:
         raise HTTPException(409, "Delete every bypass policy referencing this gate (including revoked/expired history) before deleting it")
+    require_no_custom_policy_bindings(db, CustomPolicyBinding.gate_id, item.id, "gate")
     record_audit(db, "GATE_DELETED", "USER", user.id, "GATE", item.id, {"slug": item.slug}, source_ip(request))
     delete_or_conflict(db, item, "Gate is still referenced by another record")
 
@@ -427,6 +435,7 @@ def delete_gate_policy(policy_id: UUID, request: Request, db: Session = Depends(
     ) or 0
     if referenced:
         raise HTTPException(409, "Reassign or delete every application on this gate policy before deleting it")
+    require_no_custom_policy_bindings(db, CustomPolicyBinding.gate_policy_id, item.id, "gate policy")
     record_audit(db, "GATE_POLICY_DELETED", "USER", user.id, "GATE_POLICY", item.id, {"slug": item.slug}, source_ip(request))
     delete_or_conflict(db, item, "Gate policy is still referenced by another record")
 

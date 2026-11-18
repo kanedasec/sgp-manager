@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -12,13 +12,18 @@ from app.core.database import get_db
 from app.core.metrics import record_enforcement_decision
 from app.core.rate_limit import hit_count
 from app.models import ApiCredential, Application, Gate, GatePolicy, GatePolicyGate
+from app.repositories.custom_policies import EffectiveCustomPolicy, effective_custom_policies
 from app.repositories.policies import effective_policy_scopes
 from app.schemas.evaluation import (
+    CustomPolicyDocumentRequest, CustomPolicyResolutionRequest, CustomPolicyResolutionResponse, CustomPolicySource,
     EnforcementEvaluationResponse, EnsureApplicationRequest, EnsureApplicationResponse, EvaluatedGateEnforcement,
     EvaluatedPolicy, EvaluationRequest, EvaluationResponse, PipelineResolutionRequest, PipelineResolutionResponse,
-    ResolvedPipelineGate,
+    ResolvedCustomPolicy, ResolvedPipelineGate,
 )
 from app.services.audit import record_audit
+from app.services.custom_policies import (
+    MEDIA_TYPES, UnrenderableCustomPolicy, canonical_digest, policy_file_response, render_custom_policy,
+)
 from app.services.gate_policies import normalize_stored_severities
 
 
@@ -60,28 +65,17 @@ def evaluate(
     return EvaluationResponse(application=application.slug, generated_at=now, policies=result)
 
 
-@router.post(
-    "/resolve-pipeline",
-    response_model=PipelineResolutionResponse,
-    summary="Resolve the ordered security pipeline for an application",
-    description=(
-        "Fail-closed pipeline discovery endpoint. Returns the active gates selected by the reusable gate policy "
-        "assigned to the application. Unknown or inactive applications and invalid policies are rejected."
-    ),
-)
-def resolve_pipeline(
-    data: PipelineResolutionRequest,
-    request: Request,
-    _: ApiCredential = Depends(api_credential),
-    db: Session = Depends(get_db),
-):
-    enforce_rate_limit(request)
-    now = datetime.now(UTC)
+def load_validated_pipeline(db: Session, application_slug: str) -> tuple[Application, GatePolicy, list[GatePolicyGate]]:
+    """Fail-closed pipeline lookup shared by every pre-scan endpoint.
+
+    Unknown/inactive applications raise 404; an inactive, empty, inactive-gate
+    or non-contiguous assigned policy raises 503.
+    """
     application = db.scalar(select(Application).options(
         selectinload(Application.gate_policy)
         .selectinload(GatePolicy.gates)
         .selectinload(GatePolicyGate.gate)
-    ).where(Application.slug == data.application, Application.active.is_(True)))
+    ).where(Application.slug == application_slug, Application.active.is_(True)))
     if not application:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Active application not found")
     policy = application.gate_policy
@@ -92,7 +86,59 @@ def resolve_pipeline(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Application gate policy is invalid")
     if [scope.position for scope in scopes] != list(range(len(scopes))):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Application gate policy order is invalid")
+    return application, policy, scopes
 
+
+def serialize_custom_policy(entry: EffectiveCustomPolicy, format: str | None) -> ResolvedCustomPolicy:
+    policy = entry.policy
+    content = None
+    if format is not None:
+        try:
+            content = render_custom_policy(policy.format, policy.document, policy.parsed_document, format)
+        except UnrenderableCustomPolicy:
+            # Fail closed: a consumer that asked for this format must not
+            # receive a partial set of the policies bound to its pipeline.
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"Custom policy {entry.key} cannot be rendered as {format.upper()}",
+            ) from None
+    return ResolvedCustomPolicy(
+        key=entry.key,
+        owner=policy.owner.slug,
+        slug=policy.slug,
+        name=policy.name,
+        source_format=policy.format,
+        digest=canonical_digest(policy.parsed_document),
+        updated_at=policy.updated_at,
+        sources=[CustomPolicySource(type=kind, target=target) for kind, target in entry.sources],
+        gates=entry.gates,
+        format=format,
+        content=content,
+        document=policy.parsed_document if format is not None else None,
+    )
+
+
+@router.post(
+    "/resolve-pipeline",
+    response_model=PipelineResolutionResponse,
+    summary="Resolve the ordered security pipeline for an application",
+    description=(
+        "Fail-closed pipeline discovery endpoint. Returns the active gates selected by the reusable gate policy "
+        "assigned to the application, plus references to the active custom policies bound to the application, "
+        "its gate policy, or its gates. Set `custom_policy_format` to embed rendered custom policy content. "
+        "Unknown or inactive applications and invalid policies are rejected."
+    ),
+)
+def resolve_pipeline(
+    data: PipelineResolutionRequest,
+    request: Request,
+    _: ApiCredential = Depends(api_credential),
+    db: Session = Depends(get_db),
+):
+    enforce_rate_limit(request)
+    now = datetime.now(UTC)
+    application, policy, scopes = load_validated_pipeline(db, data.application)
+    custom = effective_custom_policies(db, application, [scope.gate for scope in scopes])
     return PipelineResolutionResponse(
         application=application.slug,
         gate_policy=policy.slug,
@@ -102,7 +148,73 @@ def resolve_pipeline(
             ResolvedPipelineGate(gate=scope.gate.slug, position=scope.position)
             for scope in scopes
         ],
+        custom_policies=[serialize_custom_policy(entry, data.custom_policy_format) for entry in custom],
     )
+
+
+@router.post(
+    "/resolve-custom-policies",
+    response_model=CustomPolicyResolutionResponse,
+    summary="Retrieve the custom policies bound to an application's pipeline",
+    description=(
+        "Returns every active custom policy bound to the application, its assigned gate policy, or a gate in "
+        "that policy, rendered in the requested format (json, yaml, or toml). With `gate`, returns the "
+        "application- and gate-policy-wide policies plus those bound to that gate. Uses the same fail-closed "
+        "application and gate-policy validation as resolve-pipeline."
+    ),
+)
+def resolve_custom_policies(
+    data: CustomPolicyResolutionRequest,
+    request: Request,
+    _: ApiCredential = Depends(api_credential),
+    db: Session = Depends(get_db),
+):
+    enforce_rate_limit(request)
+    now = datetime.now(UTC)
+    application, policy, scopes = load_validated_pipeline(db, data.application)
+    if data.gate and data.gate not in {scope.gate.slug for scope in scopes}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Gate is not part of this application's pipeline")
+    custom = effective_custom_policies(db, application, [scope.gate for scope in scopes])
+    if data.gate:
+        custom = [entry for entry in custom if entry.pipeline_wide or data.gate in entry.gates]
+    return CustomPolicyResolutionResponse(
+        application=application.slug,
+        gate_policy=policy.slug,
+        gate=data.gate,
+        format=data.format,
+        generated_at=now,
+        custom_policies=[serialize_custom_policy(entry, data.format) for entry in custom],
+    )
+
+
+@router.post(
+    "/custom-policy-document",
+    response_class=Response,
+    summary="Download one bound custom policy as a JSON, YAML, or TOML file",
+    description=(
+        "Returns the raw policy file. The policy must be active and bound to the application, its gate policy, "
+        "or one of its pipeline gates; otherwise 404. The `X-Policy-Digest` header carries the canonical digest."
+    ),
+    responses={200: {"content": {media: {} for media in MEDIA_TYPES.values()}}},
+)
+def custom_policy_document(
+    data: CustomPolicyDocumentRequest,
+    request: Request,
+    _: ApiCredential = Depends(api_credential),
+    db: Session = Depends(get_db),
+):
+    enforce_rate_limit(request)
+    application, _policy, scopes = load_validated_pipeline(db, data.application)
+    key = f"{data.owner}/{data.policy}"
+    entry = next(
+        (item for item in effective_custom_policies(db, application, [scope.gate for scope in scopes])
+         if item.key == key),
+        None,
+    )
+    if entry is None:
+        # Unbound, inactive, and nonexistent policies are indistinguishable.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Custom policy is not bound to this application")
+    return policy_file_response(entry.policy, data.format)
 
 
 @router.post(

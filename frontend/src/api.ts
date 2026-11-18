@@ -23,6 +23,24 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return response.json()
 }
 
+export async function apiDownload(path: string, fallbackName: string): Promise<void> {
+  const token = sessionStorage.getItem('sgbm_token')
+  const response = await fetch(`${BASE}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  if (response.status === 401) {
+    sessionStorage.removeItem('sgbm_token')
+    window.dispatchEvent(new Event('sgbm-unauthorized'))
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new ApiError(response.status, typeof body.detail === 'string' ? body.detail : 'Download failed')
+  }
+  const name = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '')?.[1] || fallbackName
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url; link.download = name; link.click()
+  URL.revokeObjectURL(url)
+}
+
 export const formatDate = (value?: string | null) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—'
 export const toUtc = (local: string) => new Date(local).toISOString()
 

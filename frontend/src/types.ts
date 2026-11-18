@@ -6,8 +6,14 @@ export type GatePolicyGate = { gate_id: string; gate_name: string; gate_slug: st
 export type GatePolicy = { id: string; name: string; slug: string; description?: string | null; active: boolean; gates: GatePolicyGate[]; application_count: number; created_at: string; updated_at: string }
 export type CustomPolicy = {
   id: string; name: string; slug: string; description?: string | null; owner_id: string; owner: Owner;
-  format: 'json' | 'yaml'; document: string; parsed_document: Record<string, unknown>; active: boolean;
-  created_by: string; created_at: string; updated_at: string
+  format: PolicyFormat; document: string; parsed_document: Record<string, unknown>; active: boolean;
+  renderable_formats: PolicyFormat[]; created_by: string; created_at: string; updated_at: string
+}
+export type PolicyFormat = 'json' | 'yaml' | 'toml'
+export type BindingTargetType = 'application' | 'gate_policy' | 'gate'
+export type CustomPolicyBinding = {
+  id: string; custom_policy_id: string; target_type: BindingTargetType; target_id: string; target_slug: string;
+  target_name: string; created_by: string; created_at: string
 }
 export type PolicyGate = { gate_id: string; gate_name: string; gate_slug: string; severities: string[]; finding_scope?: string[] | null }
 export type Policy = {

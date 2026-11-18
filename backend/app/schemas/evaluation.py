@@ -1,8 +1,12 @@
 from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from app.schemas.common import Slug
+
+
+CustomPolicyFormat = Literal["json", "yaml", "toml"]
 
 
 class EvaluationRequest(BaseModel):
@@ -12,9 +16,40 @@ class EvaluationRequest(BaseModel):
 
 class PipelineResolutionRequest(BaseModel):
     application: Slug = Field(min_length=2, max_length=100, description="Unique application identifier")
+    custom_policy_format: CustomPolicyFormat | None = Field(
+        default=None,
+        description=(
+            "Optional. When set, every bound custom policy in the response also carries its rendered "
+            "`content` in this format and its canonical `document`. When omitted (the default for existing "
+            "consumers), only lightweight references are returned so the response stays small."
+        ),
+    )
+
+
+class CustomPolicySource(BaseModel):
+    type: Literal["application", "gate_policy", "gate"]
+    target: str
+
+
+class ResolvedCustomPolicy(BaseModel):
+    key: str = Field(description="Stable `<owner>/<slug>` identifier, unique across owners")
+    owner: str
+    slug: str
+    name: str
+    source_format: CustomPolicyFormat
+    digest: str = Field(description="Format-independent sha256 of the canonical JSON document")
+    updated_at: datetime
+    sources: list[CustomPolicySource] = Field(description="Every binding that made this policy effective")
+    gates: list[str] = Field(description="Pipeline gates this policy is bound to directly, in pipeline order")
+    format: CustomPolicyFormat | None = Field(default=None, description="Format of `content`, when requested")
+    content: str | None = Field(default=None, description="Rendered policy document, when requested")
+    document: dict[str, Any] | None = Field(default=None, description="Canonical parsed document, when requested")
 
 
 class ResolvedPipelineGate(BaseModel):
+    # Deliberately unchanged: pinned platform-workflows consumers validate
+    # these entries. Gate associations of custom policies are reported on
+    # the top-level `custom_policies[].gates` instead.
     gate: str
     position: int
 
@@ -25,6 +60,35 @@ class PipelineResolutionResponse(BaseModel):
     gate_policy_name: str
     generated_at: datetime
     gates: list[ResolvedPipelineGate]
+    custom_policies: list[ResolvedCustomPolicy] = Field(
+        default_factory=list,
+        description="Active custom policies bound to the application, its gate policy, or its pipeline gates",
+    )
+
+
+class CustomPolicyResolutionRequest(BaseModel):
+    application: Slug = Field(min_length=2, max_length=100, description="Unique application identifier")
+    gate: Slug | None = Field(
+        default=None, min_length=2, max_length=100,
+        description="Optional pipeline gate; returns application/gate-policy-wide policies plus that gate's",
+    )
+    format: CustomPolicyFormat = Field(default="json", description="Format of each policy's rendered `content`")
+
+
+class CustomPolicyResolutionResponse(BaseModel):
+    application: str
+    gate_policy: str
+    gate: str | None
+    format: CustomPolicyFormat
+    generated_at: datetime
+    custom_policies: list[ResolvedCustomPolicy]
+
+
+class CustomPolicyDocumentRequest(BaseModel):
+    application: Slug = Field(min_length=2, max_length=100, description="Unique application identifier")
+    owner: Slug = Field(min_length=2, max_length=100, description="Owner slug of the custom policy")
+    policy: Slug = Field(min_length=2, max_length=100, description="Custom policy slug within the owner")
+    format: CustomPolicyFormat = Field(default="json", description="Output file format")
 
 
 class EvaluatedPolicy(BaseModel):

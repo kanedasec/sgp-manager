@@ -2,12 +2,14 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.schemas.common import Slug
+from app.services.custom_policies import renderable_formats
 
 
-PolicyFormat = Literal["json", "yaml"]
+PolicyFormat = Literal["json", "yaml", "toml"]
+BindingTargetType = Literal["application", "gate_policy", "gate"]
 
 
 class CustomPolicyOwner(BaseModel):
@@ -50,4 +52,29 @@ class CustomPolicyResponse(BaseModel):
     created_by: UUID
     created_at: datetime
     updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    @property
+    def renderable_formats(self) -> list[PolicyFormat]:
+        """Formats this document can be exported or delivered in. JSON and
+        YAML always work; TOML is excluded for documents containing nulls or
+        integers outside the signed 64-bit range."""
+        return renderable_formats(self.format, self.document, self.parsed_document)
+
+
+class CustomPolicyBindingCreate(BaseModel):
+    target_type: BindingTargetType
+    target_id: UUID
+
+
+class CustomPolicyBindingResponse(BaseModel):
+    id: UUID
+    custom_policy_id: UUID
+    target_type: BindingTargetType
+    target_id: UUID
+    target_slug: str
+    target_name: str
+    created_by: UUID
+    created_at: datetime
     model_config = ConfigDict(from_attributes=True)
