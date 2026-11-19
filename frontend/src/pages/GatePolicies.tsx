@@ -4,7 +4,7 @@ import {
 import { useEffect, useState, type DragEvent, type FormEvent } from 'react'
 import { api } from '../api'
 import { Alert, Badge, Empty, Modal, PageHeader, Spinner } from '../components/ui'
-import type { Entity, GatePolicy, GatePolicyGate } from '../types'
+import type { CustomPolicy, Entity, GatePolicy, GatePolicyGate } from '../types'
 
 const severities = ['low', 'medium', 'high', 'critical']
 type Editor = Partial<GatePolicy> & { gates: GatePolicyGate[] }
@@ -12,6 +12,7 @@ type Editor = Partial<GatePolicy> & { gates: GatePolicyGate[] }
 export default function GatePolicies() {
   const [policies, setPolicies] = useState<GatePolicy[]>([])
   const [gates, setGates] = useState<Entity[]>([])
+  const [customPolicies, setCustomPolicies] = useState<CustomPolicy[]>([])
   const [editor, setEditor] = useState<Editor | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -21,12 +22,14 @@ export default function GatePolicies() {
   const load = async () => {
     setLoading(true)
     try {
-      const [policyItems, gateItems] = await Promise.all([
+      const [policyItems, gateItems, customPolicyItems] = await Promise.all([
         api<GatePolicy[]>('/api/v1/admin/gate-policies'),
         api<Entity[]>('/api/v1/admin/gates?include_inactive=false'),
+        api<CustomPolicy[]>('/api/v1/admin/custom-policies?include_inactive=false'),
       ])
       setPolicies(policyItems)
       setGates(gateItems)
+      setCustomPolicies(customPolicyItems)
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not load gate policies') }
     finally { setLoading(false) }
   }
@@ -52,6 +55,8 @@ export default function GatePolicies() {
       gate_slug: source!.slug,
       position: 0,
       blocking_severities: source!.default_blocking_severities || [...severities],
+      custom_policy_id: null,
+      custom_policy: null,
     }
     const target = beforeGateId ? next.findIndex(gate => gate.gate_id === beforeGateId) : -1
     next.splice(target >= 0 ? target : next.length, 0, entry)
@@ -83,6 +88,15 @@ export default function GatePolicies() {
     } : gate),
   } : current)
 
+  const setCustomPolicy = (gateId: string, customPolicyId: string) => setEditor(current => current ? {
+    ...current,
+    gates: current.gates.map(gate => gate.gate_id === gateId ? {
+      ...gate,
+      custom_policy_id: customPolicyId || null,
+      custom_policy: customPolicies.find(policy => policy.id === customPolicyId) || null,
+    } : gate),
+  } : current)
+
   const startDrag = (event: DragEvent, gateId: string) => {
     event.dataTransfer.effectAllowed = 'move'
     event.dataTransfer.setData('text/plain', gateId)
@@ -97,7 +111,11 @@ export default function GatePolicies() {
     const form = new FormData(event.currentTarget)
     const body = {
       name: form.get('name'), slug: form.get('slug'), description: form.get('description') || null,
-      gates: editor.gates.map(gate => ({ gate_id: gate.gate_id, blocking_severities: gate.blocking_severities })),
+      gates: editor.gates.map(gate => ({
+        gate_id: gate.gate_id,
+        blocking_severities: gate.blocking_severities,
+        custom_policy_id: gate.custom_policy_id || null,
+      })),
     }
     setError(''); setSaving(true)
     try {
@@ -148,7 +166,7 @@ export default function GatePolicies() {
       <p>{policy.description || 'No description provided.'}</p>
       <div className="policy-impact"><b>{policy.application_count}</b><span>ASSIGNED<br />APPLICATIONS</span><strong>{policy.gates.length}</strong><span>ACTIVE<br />GATES</span></div>
       <div className="policy-flow">{policy.gates.map((gate, index) => <div key={gate.gate_id}>
-        <span>{String(index + 1).padStart(2, '0')}</span><div><b>{gate.gate_name}</b><code>{gate.gate_slug}</code></div><div className="badge-row">{gate.blocking_severities.map(severity => <Badge key={severity} tone={severity}>{severity}</Badge>)}</div>
+        <span>{String(index + 1).padStart(2, '0')}</span><div><b>{gate.gate_name}</b><code>{gate.gate_slug}</code><small>{gate.custom_policy ? `Policy: ${gate.custom_policy.slug}` : 'Policy: gate fallback'}</small></div><div className="badge-row">{gate.blocking_severities.map(severity => <Badge key={severity} tone={severity}>{severity}</Badge>)}</div>
       </div>)}</div>
       <footer><button onClick={() => edit(policy)}><Edit3 size={15} /> Edit standard</button><button onClick={() => void toggle(policy)}><Power size={15} /> {policy.active ? 'Deactivate' : 'Activate'}</button><button className="danger-action" onClick={() => void remove(policy)}><Trash2 size={15} /> Delete</button></footer>
     </article>)}</section> : <section className="panel"><Empty title="No gate policies" detail="Create a reusable security standard before registering an application." /></section>}
@@ -164,6 +182,7 @@ export default function GatePolicies() {
             {editor.gates.map((gate, index) => <article key={gate.gate_id} draggable onDragStart={event => startDrag(event, gate.gate_id)} onDragEnd={() => setDragging(null)} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); event.stopPropagation(); placeGate(draggedGate(event), gate.gate_id); setDragging(null) }} className={dragging === gate.gate_id ? 'policy-editor-gate dragging' : 'policy-editor-gate'}>
               <div className="policy-gate-main"><GripVertical className="drag-handle" /><span className="pipeline-order">{String(index + 1).padStart(2, '0')}</span><div><b>{gate.gate_name}</b><code>{gate.gate_slug}</code></div><div className="pipeline-actions"><button type="button" aria-label={`Move ${gate.gate_name} up`} disabled={index === 0} onClick={() => moveGate(gate.gate_id, -1)}><ArrowUp /></button><button type="button" aria-label={`Move ${gate.gate_name} down`} disabled={index === editor.gates.length - 1} onClick={() => moveGate(gate.gate_id, 1)}><ArrowDown /></button><button type="button" aria-label={`Remove ${gate.gate_name}`} onClick={() => removeGate(gate.gate_id)}><X /></button></div></div>
               <fieldset className="inline-severities"><legend>BLOCK ON</legend>{severities.map(severity => <label key={severity} className="mini-severity"><input type="checkbox" checked={gate.blocking_severities.includes(severity)} onChange={event => setSeverity(gate.gate_id, severity, event.target.checked)} /><span>{severity}</span></label>)}</fieldset>
+              <label>Custom policy<select value={gate.custom_policy_id || ''} onChange={event => setCustomPolicy(gate.gate_id, event.target.value)}><option value="">Use gate fallback</option>{customPolicies.filter(policy => policy.owner_id === gates.find(item => item.id === gate.gate_id)?.owner_id).map(policy => <option key={policy.id} value={policy.id}>{policy.name} — {policy.slug}</option>)}</select><small className="field-help">A specific selection overrides the gate fallback. Policies are never merged.</small></label>
             </article>)}
             {!editor.gates.length && <div className="pipeline-empty">Add at least one scanner. CI fails closed when an assigned policy has no valid gates.</div>}
           </div>

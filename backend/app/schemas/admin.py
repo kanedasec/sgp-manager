@@ -119,6 +119,8 @@ class GateCreate(BaseModel):
     default_blocking_severities: list[Severity] = Field(
         default_factory=lambda: list(Severity), min_length=1, max_length=4
     )
+    custom_policy_required: bool = False
+    default_custom_policy_id: UUID | None = None
 
     @field_validator("default_blocking_severities")
     @classmethod
@@ -133,6 +135,8 @@ class GateUpdate(BaseModel):
     active: bool | None = None
     owner_id: UUID | None = None
     default_blocking_severities: list[Severity] | None = Field(default=None, min_length=1, max_length=4)
+    custom_policy_required: bool | None = None
+    default_custom_policy_id: UUID | None = None
 
     @field_validator("default_blocking_severities")
     @classmethod
@@ -151,6 +155,9 @@ class GateResponse(BaseModel):
     owner_id: UUID
     owner: OwnerResponse
     default_blocking_severities: list[str]
+    custom_policy_required: bool
+    default_custom_policy_id: UUID | None
+    default_custom_policy: GatePolicySummary | None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -186,6 +193,7 @@ def normalize_severities(value: list[Severity]) -> list[Severity]:
 class GatePolicyGateInput(BaseModel):
     gate_id: UUID
     blocking_severities: list[Severity] = Field(min_length=1, max_length=4)
+    custom_policy_id: UUID | None = None
 
     @field_validator("blocking_severities")
     @classmethod
@@ -199,6 +207,8 @@ class GatePolicyGateResponse(BaseModel):
     gate_slug: str
     position: int
     blocking_severities: list[str]
+    custom_policy_id: UUID | None
+    custom_policy: GatePolicySummary | None
 
 
 class GatePolicyCreate(BaseModel):

@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import admin_user, current_user, source_ip
 from app.core.database import get_db
-from app.models import Application, CustomPolicy, CustomPolicyBinding, Gate, GatePolicy, OwnerLabel, User
+from app.models import (
+    Application, CustomPolicy, CustomPolicyBinding, Gate, GatePolicy, GatePolicyGate, OwnerLabel, User,
+)
 from app.schemas.custom_policies import (
     CustomPolicyBindingCreate, CustomPolicyBindingResponse, CustomPolicyCreate, CustomPolicyResponse,
     CustomPolicyUpdate, PolicyFormat,
@@ -136,6 +138,18 @@ def update_custom_policy(
 ):
     item = visible_policy(db, policy_id, user, "edit")
     changes = data.model_dump(exclude_unset=True)
+    if changes.get("active") is False:
+        referenced_as_fallback = db.scalar(
+            select(Gate.id).where(Gate.default_custom_policy_id == item.id).limit(1)
+        )
+        referenced_by_policy_gate = db.scalar(
+            select(GatePolicyGate.id).where(GatePolicyGate.custom_policy_id == item.id).limit(1)
+        )
+        if referenced_as_fallback or referenced_by_policy_gate:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Remove this custom policy from every gate configuration before deactivating it",
+            )
     if changes.get("active") is True and not item.owner.active:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Custom policy owner is inactive")
     if "format" in changes or "document" in changes:
@@ -173,10 +187,10 @@ def export_custom_policy(
     return policy_file_response(visible_policy(db, policy_id, user, "view"), format)
 
 
-# Bindings decide which applications' pipelines receive a document. A gate or
-# gate-policy binding reaches every application using it, across owner
-# boundaries, so binding management is administrator-only, matching gate
-# policy assignment. Owner-scoped authors still maintain document content.
+# Legacy bindings are retained for administrative API compatibility and audit
+# history, but deterministic pipeline resolution no longer reads them. New
+# scanner configuration belongs on GatePolicyGate.custom_policy_id or the
+# gate's single default_custom_policy_id fallback.
 BINDING_TARGETS = {
     "application": (Application, "application_id", "Application"),
     "gate_policy": (GatePolicy, "gate_policy_id", "Gate policy"),
@@ -184,7 +198,7 @@ BINDING_TARGETS = {
 }
 
 
-@router.get("/{policy_id}/bindings", response_model=list[CustomPolicyBindingResponse])
+@router.get("/{policy_id}/bindings", response_model=list[CustomPolicyBindingResponse], deprecated=True)
 def list_custom_policy_bindings(
     policy_id: UUID,
     db: Session = Depends(get_db),
@@ -198,6 +212,7 @@ def list_custom_policy_bindings(
     "/{policy_id}/bindings",
     response_model=CustomPolicyBindingResponse,
     status_code=status.HTTP_201_CREATED,
+    deprecated=True,
 )
 def create_custom_policy_binding(
     policy_id: UUID,
@@ -240,7 +255,9 @@ def create_custom_policy_binding(
     return binding
 
 
-@router.delete("/{policy_id}/bindings/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{policy_id}/bindings/{binding_id}", status_code=status.HTTP_204_NO_CONTENT, deprecated=True,
+)
 def delete_custom_policy_binding(
     policy_id: UUID,
     binding_id: UUID,

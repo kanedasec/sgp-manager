@@ -1,8 +1,8 @@
 export type Owner = { id: string; name: string; slug: string; description?: string | null; active: boolean; created_at: string; updated_at: string }
 export type GatePolicySummary = { id: string; name: string; slug: string; active: boolean }
 export type ApplicationCriticality = 'low' | 'medium' | 'high' | 'critical'
-export type Entity = { id: string; name: string; slug: string; description?: string | null; active: boolean; created_at: string; updated_at: string; owner_id?: string | null; owner?: Owner | null; company?: string | null; criticality?: ApplicationCriticality | null; default_blocking_severities?: string[]; gate_policy_id?: string; gate_policy?: GatePolicySummary }
-export type GatePolicyGate = { gate_id: string; gate_name: string; gate_slug: string; position: number; blocking_severities: string[] }
+export type Entity = { id: string; name: string; slug: string; description?: string | null; active: boolean; created_at: string; updated_at: string; owner_id?: string | null; owner?: Owner | null; company?: string | null; criticality?: ApplicationCriticality | null; default_blocking_severities?: string[]; custom_policy_required?: boolean; default_custom_policy_id?: string | null; default_custom_policy?: GatePolicySummary | null; gate_policy_id?: string; gate_policy?: GatePolicySummary }
+export type GatePolicyGate = { gate_id: string; gate_name: string; gate_slug: string; position: number; blocking_severities: string[]; custom_policy_id: string | null; custom_policy: GatePolicySummary | null }
 export type GatePolicy = { id: string; name: string; slug: string; description?: string | null; active: boolean; gates: GatePolicyGate[]; application_count: number; created_at: string; updated_at: string }
 export type CustomPolicy = {
   id: string; name: string; slug: string; description?: string | null; owner_id: string; owner: Owner;

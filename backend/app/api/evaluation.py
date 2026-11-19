@@ -110,6 +110,7 @@ def serialize_custom_policy(entry: EffectiveCustomPolicy, format: str | None) ->
         source_format=policy.format,
         digest=canonical_digest(policy.parsed_document),
         updated_at=policy.updated_at,
+        resolution_source=entry.resolution_source,
         sources=[CustomPolicySource(type=kind, target=target) for kind, target in entry.sources],
         gates=entry.gates,
         format=format,
@@ -124,8 +125,9 @@ def serialize_custom_policy(entry: EffectiveCustomPolicy, format: str | None) ->
     summary="Resolve the ordered security pipeline for an application",
     description=(
         "Fail-closed pipeline discovery endpoint. Returns the active gates selected by the reusable gate policy "
-        "assigned to the application, plus references to the active custom policies bound to the application, "
-        "its gate policy, or its gates. Set `custom_policy_format` to embed rendered custom policy content. "
+        "assigned to the application, plus at most one effective custom policy per gate. A gate-policy-specific "
+        "policy takes precedence over its gate's global fallback; policies are never merged. Set "
+        "`custom_policy_format` to embed rendered custom policy content. "
         "Unknown or inactive applications and invalid policies are rejected."
     ),
 )
@@ -138,7 +140,7 @@ def resolve_pipeline(
     enforce_rate_limit(request)
     now = datetime.now(UTC)
     application, policy, scopes = load_validated_pipeline(db, data.application)
-    custom = effective_custom_policies(db, application, [scope.gate for scope in scopes])
+    custom = effective_custom_policies(policy, scopes)
     return PipelineResolutionResponse(
         application=application.slug,
         gate_policy=policy.slug,
@@ -155,12 +157,11 @@ def resolve_pipeline(
 @router.post(
     "/resolve-custom-policies",
     response_model=CustomPolicyResolutionResponse,
-    summary="Retrieve the custom policies bound to an application's pipeline",
+    summary="Retrieve the effective custom policies for an application's pipeline",
     description=(
-        "Returns every active custom policy bound to the application, its assigned gate policy, or a gate in "
-        "that policy, rendered in the requested format (json, yaml, or toml). With `gate`, returns the "
-        "application- and gate-policy-wide policies plus those bound to that gate. Uses the same fail-closed "
-        "application and gate-policy validation as resolve-pipeline."
+        "Returns the deterministic effective custom policy for each gate, rendered in the requested format "
+        "(json, yaml, or toml). With `gate`, returns zero or one policy for exactly that gate. A specific "
+        "Gate Policy + Gate assignment overrides the gate fallback; policies are never merged."
     ),
 )
 def resolve_custom_policies(
@@ -174,9 +175,7 @@ def resolve_custom_policies(
     application, policy, scopes = load_validated_pipeline(db, data.application)
     if data.gate and data.gate not in {scope.gate.slug for scope in scopes}:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Gate is not part of this application's pipeline")
-    custom = effective_custom_policies(db, application, [scope.gate for scope in scopes])
-    if data.gate:
-        custom = [entry for entry in custom if entry.pipeline_wide or data.gate in entry.gates]
+    custom = effective_custom_policies(policy, scopes, data.gate)
     return CustomPolicyResolutionResponse(
         application=application.slug,
         gate_policy=policy.slug,
@@ -190,10 +189,10 @@ def resolve_custom_policies(
 @router.post(
     "/custom-policy-document",
     response_class=Response,
-    summary="Download one bound custom policy as a JSON, YAML, or TOML file",
+    summary="Download one effective custom policy as a JSON, YAML, or TOML file",
     description=(
-        "Returns the raw policy file. The policy must be active and bound to the application, its gate policy, "
-        "or one of its pipeline gates; otherwise 404. The `X-Policy-Digest` header carries the canonical digest."
+        "Returns the raw policy file. The policy must be the deterministic effective policy for one of the "
+        "application's pipeline gates; otherwise 404. The `X-Policy-Digest` header carries the canonical digest."
     ),
     responses={200: {"content": {media: {} for media in MEDIA_TYPES.values()}}},
 )
@@ -204,16 +203,16 @@ def custom_policy_document(
     db: Session = Depends(get_db),
 ):
     enforce_rate_limit(request)
-    application, _policy, scopes = load_validated_pipeline(db, data.application)
+    application, policy, scopes = load_validated_pipeline(db, data.application)
     key = f"{data.owner}/{data.policy}"
     entry = next(
-        (item for item in effective_custom_policies(db, application, [scope.gate for scope in scopes])
+        (item for item in effective_custom_policies(policy, scopes)
          if item.key == key),
         None,
     )
     if entry is None:
         # Unbound, inactive, and nonexistent policies are indistinguishable.
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Custom policy is not bound to this application")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Custom policy is not effective for this application")
     return policy_file_response(entry.policy, data.format)
 
 

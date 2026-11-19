@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { Alert, Badge, Empty, Modal, PageHeader, Spinner } from '../components/ui'
-import type { Entity, GatePolicy, Owner } from '../types'
+import type { CustomPolicy, Entity, GatePolicy, Owner } from '../types'
 
 const severities = ['low', 'medium', 'high', 'critical']
 
@@ -13,6 +13,7 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
   const [items, setItems] = useState<Entity[]>([])
   const [owners, setOwners] = useState<Owner[]>([])
   const [gatePolicies, setGatePolicies] = useState<GatePolicy[]>([])
+  const [customPolicies, setCustomPolicies] = useState<CustomPolicy[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState<Partial<Entity> | null>(null)
@@ -29,6 +30,7 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
         requests.push(api<Owner[]>('/api/v1/admin/owner-labels'))
       } else if (!applicationMode) {
         requests.push(api<Owner[]>('/api/v1/admin/owner-labels'))
+        if (user?.role === 'ADMIN') requests.push(api<CustomPolicy[]>('/api/v1/admin/custom-policies?include_inactive=false'))
       }
       const results = await Promise.all(requests)
       setItems(results[0] as Entity[])
@@ -37,6 +39,7 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
         setOwners(results[2] as Owner[])
       } else if (!applicationMode) {
         setOwners(results[1] as Owner[])
+        if (user?.role === 'ADMIN') setCustomPolicies(results[2] as CustomPolicy[])
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load records')
@@ -65,6 +68,10 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
         : {
             owner_id: form.get('owner_id'),
             default_blocking_severities: severities.filter(s => form.get(`default_${s}`)),
+            ...(user?.role === 'ADMIN' ? {
+              custom_policy_required: form.get('custom_policy_required') === 'on',
+              default_custom_policy_id: form.get('default_custom_policy_id') || null,
+            } : {}),
           }),
     }
     try {
@@ -119,6 +126,7 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
         <p>{item.description || 'No description provided.'}</p>
         {applicationMode && item.gate_policy && <div className="assigned-standard"><ShieldCheck size={15} /><span>GATE POLICY</span><b>{item.gate_policy.name}</b><code>{item.gate_policy.slug}</code></div>}
         {!applicationMode && <div className="gate-defaults"><span>POLICY AUTHORING DEFAULT</span><div className="badge-row">{item.default_blocking_severities?.map(s => <Badge key={s} tone={s}>{s}</Badge>)}</div></div>}
+        {!applicationMode && <div className="assigned-standard"><ShieldCheck size={15} /><span>CUSTOM POLICY</span><b>{item.default_custom_policy?.name || 'No global fallback'}</b><code>{item.default_custom_policy?.slug || (item.custom_policy_required ? 'REQUIRED' : 'OPTIONAL')}</code></div>}
         {canEdit(item) && <div className="entity-actions"><button onClick={e => { e.stopPropagation(); setEditing(item) }}><Edit3 size={15} /> Edit</button><button onClick={e => { e.stopPropagation(); void toggle(item) }}><Power size={15} /> {item.active ? 'Disable' : 'Enable'}</button>{canDelete && <button className="danger-action" onClick={e => { e.stopPropagation(); void remove(item) }}><Trash2 size={15} /> Delete</button>}</div>}
       </article>)}</div> : <Empty title={`No ${kind} found`} detail={`Create the first ${label.toLowerCase()} or change the search term.`} />}
     </section>
@@ -131,6 +139,7 @@ export default function Entities({ kind }: { kind: 'applications' | 'gates' }) {
       {applicationMode && <label>Company<input name="company" required minLength={2} maxLength={120} defaultValue={editing.company || ''} placeholder="Acme Corporation" /></label>}
       {applicationMode && <label>Criticality<select name="criticality" required defaultValue={editing.criticality || ''}><option value="" disabled>Select business criticality</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select><span className="field-help">Business impact classification for this application.</span></label>}
       {!applicationMode && <label>Owner<select name="owner_id" required defaultValue={editing.owner_id || ''}><option value="" disabled>Select owner</option>{owners.filter(owner => editing.id ? can('gates', 'edit', owner.slug) : can('gates', 'create', owner.slug)).map(owner => <option key={owner.id} value={owner.id}>{owner.name} — {owner.slug}</option>)}</select></label>}
+      {!applicationMode && user?.role === 'ADMIN' && <><label>Global custom-policy fallback<select name="default_custom_policy_id" defaultValue={editing.default_custom_policy_id || ''}><option value="">No fallback</option>{customPolicies.map(policy => <option key={policy.id} value={policy.id}>{policy.name} — {policy.owner.slug}/{policy.slug}</option>)}</select><span className="field-help">Used only when a Gate Policy does not select a specific policy for this gate.</span></label><label className="checkbox-line"><input name="custom_policy_required" type="checkbox" defaultChecked={editing.custom_policy_required || false} /> Fail preflight when no custom policy resolves</label></>}
       <label>Description<textarea name="description" maxLength={2000} rows={4} defaultValue={editing.description || ''} /></label>
       {!applicationMode && <fieldset className="severity-picker"><legend>Policy authoring defaults</legend>{severities.map(s => <label key={s} className={`severity-option severity-${s}`}><input type="checkbox" name={`default_${s}`} defaultChecked={editing.id ? editing.default_blocking_severities?.includes(s) : true} /><span>{s.toUpperCase()}</span></label>)}<p className="field-help">Used to prefill a gate when an administrator adds it to a policy. Existing policies keep their own values.</p></fieldset>}
       <div className="form-actions"><button type="button" className="button button-secondary" onClick={() => setEditing(null)}>Cancel</button><button className="button button-primary">Save {label}</button></div>

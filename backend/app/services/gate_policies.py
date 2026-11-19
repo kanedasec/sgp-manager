@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Application, Gate, GatePolicy, GatePolicyGate
+from app.models import Application, CustomPolicy, Gate, GatePolicy, GatePolicyGate
 from app.schemas.admin import GatePolicyGateInput, GatePolicyResponse
 
 
@@ -15,7 +15,8 @@ CANONICAL_SEVERITIES = ("low", "medium", "high", "critical")
 
 def gate_policy_query():
     return select(GatePolicy).options(
-        selectinload(GatePolicy.gates).selectinload(GatePolicyGate.gate)
+        selectinload(GatePolicy.gates).selectinload(GatePolicyGate.gate),
+        selectinload(GatePolicy.gates).selectinload(GatePolicyGate.custom_policy),
     )
 
 
@@ -58,7 +59,23 @@ def validate_policy_gates(
             status.HTTP_400_BAD_REQUEST,
             "Inactive gates cannot be added to a gate policy",
         )
-    return [by_id[gate_id] for gate_id in gate_ids]
+    ordered = [by_id[gate_id] for gate_id in gate_ids]
+    policy_ids = {item.custom_policy_id for item in requested if item.custom_policy_id}
+    custom_policies = list(db.scalars(select(CustomPolicy).where(CustomPolicy.id.in_(policy_ids)))) if policy_ids else []
+    custom_by_id = {item.id: item for item in custom_policies}
+    if len(custom_by_id) != len(policy_ids) or any(not item.active for item in custom_policies):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Every selected custom policy must exist and be active",
+        )
+    for item, gate in zip(requested, ordered, strict=True):
+        custom_policy = custom_by_id.get(item.custom_policy_id)
+        if custom_policy and custom_policy.owner_id != gate.owner_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "A gate-specific custom policy must belong to the same owner as its gate",
+            )
+    return ordered
 
 
 def replace_policy_gates(
@@ -72,6 +89,7 @@ def replace_policy_gates(
             GatePolicyGate(
                 id=uuid4(),
                 gate_id=item.gate_id,
+                custom_policy_id=item.custom_policy_id,
                 position=position,
                 blocking_severities=[severity.value for severity in item.blocking_severities],
             )
@@ -98,6 +116,8 @@ def serialize_gate_policy(db: Session, policy: GatePolicy) -> GatePolicyResponse
                 "blocking_severities": normalize_stored_severities(
                     item.blocking_severities
                 ),
+                "custom_policy_id": item.custom_policy_id,
+                "custom_policy": item.custom_policy,
             }
             for item in sorted(policy.gates, key=lambda scope: scope.position)
         ],

@@ -19,7 +19,7 @@ class PipelineResolutionRequest(BaseModel):
     custom_policy_format: CustomPolicyFormat | None = Field(
         default=None,
         description=(
-            "Optional. When set, every bound custom policy in the response also carries its rendered "
+            "Optional. When set, every effective custom policy in the response also carries its rendered "
             "`content` in this format and its canonical `document`. When omitted (the default for existing "
             "consumers), only lightweight references are returned so the response stays small."
         ),
@@ -39,7 +39,12 @@ class ResolvedCustomPolicy(BaseModel):
     source_format: CustomPolicyFormat
     digest: str = Field(description="Format-independent sha256 of the canonical JSON document")
     updated_at: datetime
-    sources: list[CustomPolicySource] = Field(description="Every binding that made this policy effective")
+    resolution_source: Literal["gate_policy_gate", "gate_fallback"] = Field(
+        description="Deterministic assignment that selected this policy for the gate"
+    )
+    sources: list[CustomPolicySource] = Field(
+        description="The gate fallback or composite Gate Policy + Gate selection"
+    )
     gates: list[str] = Field(description="Pipeline gates this policy is bound to directly, in pipeline order")
     format: CustomPolicyFormat | None = Field(default=None, description="Format of `content`, when requested")
     content: str | None = Field(default=None, description="Rendered policy document, when requested")
@@ -62,7 +67,7 @@ class PipelineResolutionResponse(BaseModel):
     gates: list[ResolvedPipelineGate]
     custom_policies: list[ResolvedCustomPolicy] = Field(
         default_factory=list,
-        description="Active custom policies bound to the application, its gate policy, or its pipeline gates",
+        description="At most one effective active custom policy per pipeline gate",
     )
 
 
@@ -70,7 +75,7 @@ class CustomPolicyResolutionRequest(BaseModel):
     application: Slug = Field(min_length=2, max_length=100, description="Unique application identifier")
     gate: Slug | None = Field(
         default=None, min_length=2, max_length=100,
-        description="Optional pipeline gate; returns application/gate-policy-wide policies plus that gate's",
+        description="Optional pipeline gate; returns only that gate's effective custom policy",
     )
     format: CustomPolicyFormat = Field(default="json", description="Format of each policy's rendered `content`")
 
