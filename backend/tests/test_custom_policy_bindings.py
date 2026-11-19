@@ -47,6 +47,27 @@ def pipeline(client, api_key, body, path="resolve-pipeline"):
     return client.post(f"/api/v1/policies/{path}", headers={"X-API-Key": api_key}, json=body)
 
 
+def configure_gate_fallback(client, headers, gate, policy=None, required=False):
+    return client.patch(f"/api/v1/admin/gates/{gate['id']}", headers=headers, json={
+        "default_custom_policy_id": policy["id"] if policy else None,
+        "custom_policy_required": required,
+    })
+
+
+def configure_policy_gate(client, headers, gate, policy=None):
+    gate_policy = default_gate_policy(client, headers)
+    response = client.patch(
+        f"/api/v1/admin/gate-policies/{gate_policy['id']}", headers=headers,
+        json={"gates": [{
+            "gate_id": item["gate_id"],
+            "blocking_severities": item["blocking_severities"],
+            "custom_policy_id": policy["id"] if item["gate_id"] == gate["id"] and policy else None,
+        } for item in gate_policy["gates"]]},
+    )
+    assert response.status_code == 200, response.text
+    return response
+
+
 def test_toml_documents_are_parsed_validated_and_canonicalized(client, admin_headers, owner):
     created = create_policy(client, admin_headers, owner, "toml-policy", "toml", TOML_DOCUMENT)
     assert created.status_code == 201
@@ -207,7 +228,7 @@ def test_bound_targets_cannot_be_hard_deleted(client, admin_headers, owner):
     assert "custom policy binding" in response.json()["detail"]
 
 
-def test_resolve_pipeline_adds_references_without_changing_gate_entries(
+def test_resolve_pipeline_uses_specific_policy_before_global_fallback_and_never_merges(
     client, admin_headers, owner, domain, api_key,
 ):
     application, gate = domain
@@ -216,62 +237,72 @@ def test_resolve_pipeline_adds_references_without_changing_gate_entries(
     assert before.status_code == 200
     assert before.json()["custom_policies"] == []
 
-    app_policy = create_policy(client, admin_headers, owner, "app-policy").json()
-    gate_policy_doc = create_policy(client, admin_headers, owner, "gate-policy-doc", "toml", TOML_DOCUMENT).json()
-    gate_doc = create_policy(client, admin_headers, owner, "gate-doc", "yaml", "scanner:\n  severity: high\n").json()
-    unrelated_gate = client.post("/api/v1/admin/gates", headers=admin_headers, json={
-        "name": "SAST", "slug": "sast", "owner_id": owner["id"],
-    }).json()
-    unrelated = create_policy(client, admin_headers, owner, "unrelated-doc").json()
-    inactive = create_policy(client, admin_headers, owner, "inactive-doc").json()
+    legacy_app = create_policy(client, admin_headers, owner, "legacy-app").json()
+    legacy_gate_policy = create_policy(client, admin_headers, owner, "legacy-gate-policy").json()
+    fallback = create_policy(client, admin_headers, owner, "gitleaks-default", "yaml", "level: default\n").json()
+    specific = create_policy(client, admin_headers, owner, "gitleaks-pci", "toml", TOML_DOCUMENT).json()
 
-    assert bind(client, admin_headers, app_policy["id"], "application", application["id"]).status_code == 201
-    assert bind(client, admin_headers, app_policy["id"], "gate", gate["id"]).status_code == 201
+    # Legacy OR-style bindings remain administratively visible but no longer
+    # participate in scanner configuration resolution.
+    assert bind(client, admin_headers, legacy_app["id"], "application", application["id"]).status_code == 201
     assert bind(
-        client, admin_headers, gate_policy_doc["id"], "gate_policy", default_gate_policy(client, admin_headers)["id"],
+        client, admin_headers, legacy_gate_policy["id"], "gate_policy",
+        default_gate_policy(client, admin_headers)["id"],
     ).status_code == 201
-    assert bind(client, admin_headers, gate_doc["id"], "gate", gate["id"]).status_code == 201
-    # A gate binding only reaches applications whose gate policy runs that gate.
-    assert bind(client, admin_headers, unrelated["id"], "gate", unrelated_gate["id"]).status_code == 201
-    assert bind(client, admin_headers, inactive["id"], "application", application["id"]).status_code == 201
-    assert client.patch(
-        f"/api/v1/admin/custom-policies/{inactive['id']}", headers=admin_headers, json={"active": False},
-    ).status_code == 200
+
+    configured = configure_gate_fallback(client, admin_headers, gate, fallback, required=True)
+    assert configured.status_code == 200, configured.text
+    fallback_response = pipeline(client, key, {"application": "payment-api"}).json()
+    assert [item["key"] for item in fallback_response["custom_policies"]] == ["appsec/gitleaks-default"]
+    assert fallback_response["custom_policies"][0]["resolution_source"] == "gate_fallback"
+
+    configure_policy_gate(client, admin_headers, gate, specific)
 
     response = pipeline(client, key, {"application": "payment-api"})
     assert response.status_code == 200
     body = response.json()
     assert body["gates"] == before.json()["gates"] == [{"gate": "secrets", "position": 0}]
-    assert [item["key"] for item in body["custom_policies"]] == [
-        "appsec/app-policy", "appsec/gate-doc", "appsec/gate-policy-doc",
-    ]
-    by_key = {item["key"]: item for item in body["custom_policies"]}
-    assert by_key["appsec/app-policy"]["sources"] == [
-        {"type": "application", "target": "payment-api"}, {"type": "gate", "target": "secrets"},
-    ]
-    assert by_key["appsec/app-policy"]["gates"] == ["secrets"]
-    assert by_key["appsec/gate-policy-doc"]["sources"] == [
+    assert [item["key"] for item in body["custom_policies"]] == ["appsec/gitleaks-pci"]
+    selected = body["custom_policies"][0]
+    assert selected["resolution_source"] == "gate_policy_gate"
+    assert selected["sources"] == [
         {"type": "gate_policy", "target": "default-security-policy"},
+        {"type": "gate", "target": "secrets"},
     ]
-    assert by_key["appsec/gate-policy-doc"]["source_format"] == "toml"
-    assert by_key["appsec/gate-policy-doc"]["digest"].startswith("sha256:")
+    assert selected["gates"] == ["secrets"]
+    assert selected["source_format"] == "toml"
+    assert selected["digest"].startswith("sha256:")
     # Default responses stay small for existing consumers: no document bodies.
     assert all(item["content"] is None and item["document"] is None for item in body["custom_policies"])
     for item in body["custom_policies"]:
         assert set(item) == {
             "key", "owner", "slug", "name", "source_format", "digest", "updated_at",
-            "sources", "gates", "format", "content", "document",
+            "resolution_source", "sources", "gates", "format", "content", "document",
         }
 
     embedded = pipeline(client, key, {"application": "payment-api", "custom_policy_format": "toml"})
     assert embedded.status_code == 200
-    for item in embedded.json()["custom_policies"]:
-        assert item["format"] == "toml"
-        assert tomllib.loads(item["content"]) == item["document"]
-    toml_item = next(
-        item for item in embedded.json()["custom_policies"] if item["key"] == "appsec/gate-policy-doc"
-    )
+    toml_item = embedded.json()["custom_policies"][0]
+    assert toml_item["format"] == "toml"
+    assert tomllib.loads(toml_item["content"]) == toml_item["document"]
     assert toml_item["content"] == TOML_DOCUMENT
+
+    audit = client.get("/api/v1/admin/audit-logs", headers=admin_headers).json()
+    gate_event = next(
+        item for item in audit
+        if item["event_type"] == "GATE_UPDATED"
+        and item["metadata"].get("custom_policy") == "gitleaks-default"
+    )
+    assert gate_event["metadata"]["previous_custom_policy"] is None
+    assert gate_event["metadata"]["custom_policy_required"] is True
+    policy_event = next(
+        item for item in audit
+        if item["event_type"] == "GATE_POLICY_UPDATED"
+        and item["metadata"].get("custom_policies") == {"secrets": "gitleaks-pci"}
+    )
+    assert policy_event["metadata"]["previous_custom_policies"] == {}
+    assert TOML_DOCUMENT not in str(gate_event["metadata"])
+    assert TOML_DOCUMENT not in str(policy_event["metadata"])
 
     assert pipeline(
         client, key, {"application": "payment-api", "custom_policy_format": "xml"},
@@ -281,10 +312,10 @@ def test_resolve_pipeline_adds_references_without_changing_gate_entries(
 def test_resolve_pipeline_fails_closed_when_requested_format_cannot_render(
     client, admin_headers, owner, domain, api_key,
 ):
-    application, _ = domain
+    _, gate = domain
     key, _ = api_key
     policy = create_policy(client, admin_headers, owner, "nullable", document='{"reviewer":null}').json()
-    assert bind(client, admin_headers, policy["id"], "application", application["id"]).status_code == 201
+    assert configure_gate_fallback(client, admin_headers, gate, policy).status_code == 200
     assert pipeline(client, key, {"application": "payment-api"}).status_code == 200
     assert pipeline(client, key, {"application": "payment-api", "custom_policy_format": "json"}).status_code == 200
     refused = pipeline(client, key, {"application": "payment-api", "custom_policy_format": "toml"})
@@ -293,12 +324,10 @@ def test_resolve_pipeline_fails_closed_when_requested_format_cannot_render(
 
 
 def test_resolve_custom_policies_by_application_and_gate(client, admin_headers, owner, domain, api_key):
-    application, gate = domain
+    _, gate = domain
     key, _ = api_key
-    wide = create_policy(client, admin_headers, owner, "wide-policy").json()
     scoped = create_policy(client, admin_headers, owner, "secrets-policy", "yaml", "entropy: 4.5\n").json()
-    assert bind(client, admin_headers, wide["id"], "application", application["id"]).status_code == 201
-    assert bind(client, admin_headers, scoped["id"], "gate", gate["id"]).status_code == 201
+    assert configure_gate_fallback(client, admin_headers, gate, scoped).status_code == 200
 
     response = pipeline(
         client, key, {"application": "payment-api", "format": "toml"}, "resolve-custom-policies",
@@ -308,15 +337,13 @@ def test_resolve_custom_policies_by_application_and_gate(client, admin_headers, 
     assert body["application"] == "payment-api"
     assert body["gate_policy"] == "default-security-policy"
     assert body["format"] == "toml"
-    assert [item["key"] for item in body["custom_policies"]] == ["appsec/secrets-policy", "appsec/wide-policy"]
+    assert [item["key"] for item in body["custom_policies"]] == ["appsec/secrets-policy"]
     assert tomllib.loads(body["custom_policies"][0]["content"]) == {"entropy": 4.5}
 
     filtered = pipeline(
         client, key, {"application": "payment-api", "gate": "secrets"}, "resolve-custom-policies",
     )
-    assert [item["key"] for item in filtered.json()["custom_policies"]] == [
-        "appsec/secrets-policy", "appsec/wide-policy",
-    ]
+    assert [item["key"] for item in filtered.json()["custom_policies"]] == ["appsec/secrets-policy"]
     client.post("/api/v1/admin/gates", headers=admin_headers, json={
         "name": "SCA", "slug": "sca", "owner_id": owner["id"],
     })
@@ -328,14 +355,14 @@ def test_resolve_custom_policies_by_application_and_gate(client, admin_headers, 
     ).status_code == 404
 
 
-def test_custom_policy_document_download_requires_binding(client, admin_headers, owner, domain, api_key):
-    application, _ = domain
+def test_custom_policy_document_download_requires_effective_assignment(client, admin_headers, owner, domain, api_key):
+    _, gate = domain
     key, _ = api_key
     quality = create_owner(client, admin_headers, "Quality", "quality")
     bound = create_policy(client, admin_headers, owner, "release-policy").json()
-    # Same slug under a different owner: unbound, must not be served.
+    # Same slug under a different owner is not effective and must not be served.
     create_policy(client, admin_headers, quality, "release-policy")
-    assert bind(client, admin_headers, bound["id"], "application", application["id"]).status_code == 201
+    assert configure_gate_fallback(client, admin_headers, gate, bound).status_code == 200
 
     request = {"application": "payment-api", "owner": "appsec", "policy": "release-policy", "format": "toml"}
     response = pipeline(client, key, request, "custom-policy-document")
@@ -347,8 +374,85 @@ def test_custom_policy_document_download_requires_binding(client, admin_headers,
     for change in ({"owner": "quality"}, {"policy": "missing-policy"}, {"application": "unknown-app"}):
         assert pipeline(client, key, {**request, **change}, "custom-policy-document").status_code == 404
 
-    client.patch(f"/api/v1/admin/custom-policies/{bound['id']}", headers=admin_headers, json={"active": False})
-    assert pipeline(client, key, request, "custom-policy-document").status_code == 404
+    refused = client.patch(
+        f"/api/v1/admin/custom-policies/{bound['id']}", headers=admin_headers, json={"active": False},
+    )
+    assert refused.status_code == 409
+
+
+def test_required_gate_without_policy_fails_preflight_closed(client, admin_headers, domain, api_key):
+    _, gate = domain
+    key, _ = api_key
+    required = configure_gate_fallback(client, admin_headers, gate, required=True)
+    assert required.status_code == 200
+
+    for path, body in (
+        ("resolve-pipeline", {"application": "payment-api"}),
+        ("resolve-custom-policies", {"application": "payment-api", "gate": "secrets"}),
+    ):
+        response = pipeline(client, key, body, path)
+        assert response.status_code == 503
+        assert "requires a custom policy" in response.json()["detail"]
+
+    optional = configure_gate_fallback(client, admin_headers, gate, required=False)
+    assert optional.status_code == 200
+    response = pipeline(
+        client, key, {"application": "payment-api", "gate": "secrets"}, "resolve-custom-policies",
+    )
+    assert response.status_code == 200
+    assert response.json()["custom_policies"] == []
+
+
+def test_custom_policy_assignments_enforce_owner_boundary(client, admin_headers, domain):
+    _, gate = domain
+    quality = create_owner(client, admin_headers, "Quality", "quality")
+    foreign = create_policy(client, admin_headers, quality, "foreign-policy").json()
+
+    fallback = configure_gate_fallback(client, admin_headers, gate, foreign)
+    assert fallback.status_code == 400
+    assert "same owner" in fallback.json()["detail"]
+
+    gate_policy = default_gate_policy(client, admin_headers)
+    specific = client.patch(
+        f"/api/v1/admin/gate-policies/{gate_policy['id']}", headers=admin_headers,
+        json={"gates": [{
+            "gate_id": gate["id"],
+            "blocking_severities": ["high", "critical"],
+            "custom_policy_id": foreign["id"],
+        }]},
+    )
+    assert specific.status_code == 400
+    assert "same owner" in specific.json()["detail"]
+
+
+def test_only_administrators_configure_gate_custom_policy_resolution(
+    client, admin_headers, owner, domain,
+):
+    _, gate = domain
+    policy = create_policy(client, admin_headers, owner, "admin-selected").json()
+    group = client.post("/api/v1/admin/groups", headers=admin_headers, json={
+        "name": "Gate Editors", "slug": "gate-editors",
+        "permissions": ["view-gates:appsec", "edit-gates:appsec"],
+    }).json()
+    client.post("/api/v1/admin/users", headers=admin_headers, json={
+        "username": "gate.editor", "password": "GateEditorPass!123", "display_name": "Gate Editor",
+        "email": "gate.editor@example.com", "role": "USER", "group_ids": [group["id"]],
+    })
+    editor = login(client, "gate.editor", "GateEditorPass!123")
+
+    response = client.patch(f"/api/v1/admin/gates/{gate['id']}", headers=editor, json={
+        "default_custom_policy_id": policy["id"], "custom_policy_required": True,
+    })
+    assert response.status_code == 403
+    assert "Administrator" in response.json()["detail"]
+
+    configured = configure_gate_fallback(client, admin_headers, gate, policy, required=True)
+    assert configured.status_code == 200
+    visible = client.get(f"/api/v1/admin/gates/{gate['id']}", headers=editor)
+    assert visible.status_code == 200
+    assert visible.json()["default_custom_policy_id"] is None
+    assert visible.json()["default_custom_policy"] is None
+    assert visible.json()["custom_policy_required"] is True
 
 
 def test_custom_policy_pipeline_endpoints_require_policy_read_credential(

@@ -56,10 +56,11 @@ run in parallel after the preflight response has been validated.
 
 ### Custom policies in the pipeline resolution
 
-The response also carries a top-level `custom_policies` array: the active custom
-policies bound to the application, to its assigned gate policy, or to a gate in
-that policy. A gate binding applies only when the application's policy runs that
-gate. Inactive documents are excluded. The `gates` entries are unchanged.
+The response also carries a top-level `custom_policies` array with at most one
+effective Custom Policy per gate. Resolution first checks the exact
+`(Gate Policy, Gate)` selection and then the gate's single global fallback.
+The two documents are never merged. A gate marked as requiring a Custom Policy
+returns `503` when neither exists. The `gates` entries are unchanged.
 
 ```json
 "custom_policies": [
@@ -71,6 +72,7 @@ gate. Inactive documents are excluded. The `gates` entries are unchanged.
     "source_format": "toml",
     "digest": "sha256:9f2c…",
     "updated_at": "2026-11-18T12:00:00Z",
+    "resolution_source": "gate_policy_gate",
     "sources": [
       {"type": "gate_policy", "target": "crown-jewels"},
       {"type": "gate", "target": "sast"}
@@ -88,7 +90,7 @@ By default only references are returned, which keeps the response well under the
 documents, send `"custom_policy_format": "json" | "yaml" | "toml"`. Each entry
 then includes `format`, the rendered `content`, and the canonical `document`.
 Consumers that opt in must raise their response size limit, because each
-document can be up to 256 KiB. If a bound document cannot be rendered in the
+document can be up to 256 KiB. If an effective document cannot be rendered in the
 requested format (TOML has no `null` and only 64-bit integers), the request
 fails with `503` instead of returning a partial set. `digest` is a
 format-independent SHA-256 of the canonical JSON document.
@@ -97,7 +99,7 @@ This lets the preflight job, which already holds the API credential, hand
 custom policies to scanner jobs as artifacts. Scanner jobs never need the
 credential.
 
-## Retrieve bound custom policies
+## Retrieve effective custom policies
 
 ```http
 POST /api/v1/policies/resolve-custom-policies
@@ -112,10 +114,11 @@ X-API-Key: sec_...
 `gate` and `format` are optional (`format` defaults to `json`). The response holds
 `application`, `gate_policy`, `gate`, `format`, `generated_at`, and
 `custom_policies` entries shaped as above, always with `content` and `document`.
-With `gate`, the result is the application- and gate-policy-wide policies plus
-the policies bound to that gate. A gate outside the application's pipeline
-returns `404`. Application and gate-policy validation is identical to
-`resolve-pipeline` (`404` unknown/inactive application, `503` invalid policy).
+With `gate`, the result contains zero or one policy for exactly that gate. A
+specific Gate Policy + Gate selection has precedence over the gate fallback. A
+gate outside the application's pipeline returns `404`. Application and
+gate-policy validation is identical to `resolve-pipeline` (`404`
+unknown/inactive application, `503` invalid or missing required policy).
 
 ## Download one custom policy file
 
@@ -134,8 +137,8 @@ Returns the raw file with `Content-Type: application/toml` (or
 `Content-Disposition: attachment; filename="semgrep-tuning.toml"`,
 `Cache-Control: no-store`, and an `X-Policy-Digest` header. A document requested
 in its authoring format is returned exactly as written, comments included. A
-policy that is inactive, unbound from this application's pipeline, or
-nonexistent returns the same `404`, so a credential cannot enumerate unbound
+policy that is inactive, not effective for this application's pipeline, or
+nonexistent returns the same `404`, so a credential cannot enumerate unrelated
 drafts. A format the document cannot be rendered in returns `422`.
 
 ```bash

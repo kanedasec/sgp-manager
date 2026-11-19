@@ -159,11 +159,18 @@ class Gate(Base):
     default_blocking_severities: Mapped[list[str]] = mapped_column(
         JSON, default=lambda: ["low", "medium", "high", "critical"]
     )
+    custom_policy_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    default_custom_policy_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("custom_policies.id", ondelete="RESTRICT"), index=True
+    )
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     policy_scopes: Mapped[list["BypassPolicyGate"]] = relationship(back_populates="gate")
     gate_policy_scopes: Mapped[list["GatePolicyGate"]] = relationship(back_populates="gate")
+    default_custom_policy: Mapped["CustomPolicy | None"] = relationship(
+        foreign_keys=[default_custom_policy_id], lazy="joined"
+    )
     owner: Mapped[OwnerLabel] = relationship()
 
 
@@ -199,12 +206,18 @@ class GatePolicyGate(Base):
         ForeignKey("gate_policies.id", ondelete="CASCADE"), index=True
     )
     gate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("gates.id", ondelete="RESTRICT"), index=True)
+    custom_policy_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("custom_policies.id", ondelete="RESTRICT"), index=True
+    )
     position: Mapped[int] = mapped_column(Integer)
     blocking_severities: Mapped[list[str]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     policy: Mapped[GatePolicy] = relationship(back_populates="gates")
     gate: Mapped[Gate] = relationship(back_populates="gate_policy_scopes", lazy="joined")
+    custom_policy: Mapped["CustomPolicy | None"] = relationship(
+        foreign_keys=[custom_policy_id], lazy="joined"
+    )
 
 
 class CustomPolicy(Base):
@@ -240,14 +253,12 @@ CUSTOM_POLICY_BINDING_TARGETS = ("application", "gate_policy", "gate")
 
 
 class CustomPolicyBinding(Base):
-    """Administrator-approved association of a custom policy with one target.
+    """Deprecated administrator association retained for compatibility.
 
     Exactly one of ``application_id``, ``gate_policy_id`` or ``gate_id`` is
-    set, matching ``target_type``. Pipeline resolution delivers a bound,
-    active custom policy to an application when it is bound to that
-    application, to the application's assigned gate policy, or to an active
-    gate selected by that gate policy. Bindings never change gate
-    enforcement or blocking severities.
+    set, matching ``target_type``. These rows no longer participate in
+    pipeline resolution; effective scanner configuration is selected through
+    ``GatePolicyGate.custom_policy_id`` and ``Gate.default_custom_policy_id``.
     """
 
     __tablename__ = "custom_policy_bindings"
