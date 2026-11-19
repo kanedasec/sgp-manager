@@ -90,7 +90,7 @@ By default only references are returned, which keeps the response well under the
 documents, send `"custom_policy_format": "json" | "yaml" | "toml"`. Each entry
 then includes `format`, the rendered `content`, and the canonical `document`.
 Consumers that opt in must raise their response size limit, because each
-document can be up to 256 KiB. If an effective document cannot be rendered in the
+document can be up to 10 MiB. If an effective document cannot be rendered in the
 requested format (TOML has no `null` and only 64-bit integers), the request
 fails with `503` instead of returning a partial set. `digest` is a
 format-independent SHA-256 of the canonical JSON document.
