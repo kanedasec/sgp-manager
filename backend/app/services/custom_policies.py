@@ -10,6 +10,22 @@ from fastapi import HTTPException, Response, status
 
 MAX_POLICY_BYTES = 256 * 1024
 MAX_POLICY_DEPTH = 32
+# Floor for the expanded-value budget below, so small documents may still
+# reuse YAML anchors freely.
+MIN_EXPANDED_VALUE_BUDGET = 100_000
+
+
+def expanded_value_budget(document_size: int) -> int:
+    """Maximum values a parsed document may contain after alias expansion.
+
+    Every value in a document without aliases occupies at least one source
+    byte, so legitimate documents never approach twice their byte size. YAML
+    aliases are the only way to exceed it: a few hundred bytes of nested
+    aliases can expand to billions of values and pin a worker in validation
+    and JSON conversion. This is not a value-count limit on ordinary
+    documents; it only bounds alias amplification relative to input size.
+    """
+    return max(MIN_EXPANDED_VALUE_BUDGET, 2 * document_size)
 
 
 class InvalidCustomPolicy(ValueError):
@@ -20,7 +36,12 @@ def _reject_json_constant(value: str) -> None:
     raise InvalidCustomPolicy(f"JSON constant '{value}' is not supported")
 
 
-def _validate_json_compatible(value: Any, depth: int, ancestors: set[int]) -> None:
+def _validate_json_compatible(value: Any, depth: int, ancestors: set[int], budget: list[int]) -> None:
+    # Traversal visits shared (aliased) objects once per reference, so this
+    # counts the fully expanded document and stops amplification early.
+    budget[0] -= 1
+    if budget[0] < 0:
+        raise InvalidCustomPolicy("Policy document expands to too many values (excessive YAML alias reuse)")
     if depth > MAX_POLICY_DEPTH:
         raise InvalidCustomPolicy(f"Policy document exceeds maximum depth {MAX_POLICY_DEPTH}")
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -36,10 +57,10 @@ def _validate_json_compatible(value: Any, depth: int, ancestors: set[int]) -> No
             for key, item in value.items():
                 if not isinstance(key, str):
                     raise InvalidCustomPolicy("Policy object keys must be strings")
-                _validate_json_compatible(item, depth + 1, ancestors)
+                _validate_json_compatible(item, depth + 1, ancestors, budget)
         else:
             for item in value:
-                _validate_json_compatible(item, depth + 1, ancestors)
+                _validate_json_compatible(item, depth + 1, ancestors, budget)
     finally:
         ancestors.remove(identity)
 
@@ -66,7 +87,7 @@ def parse_custom_policy(format: str, document: str) -> dict[str, Any]:
         raise InvalidCustomPolicy(f"Invalid {format.upper()} policy document") from exc
     if not isinstance(parsed, dict):
         raise InvalidCustomPolicy("Custom policy document must contain an object at its root")
-    _validate_json_compatible(parsed, 0, set())
+    _validate_json_compatible(parsed, 0, set(), [expanded_value_budget(document_size)])
     try:
         return json.loads(json.dumps(parsed, allow_nan=False))
     except (TypeError, ValueError) as exc:

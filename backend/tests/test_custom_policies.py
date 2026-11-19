@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 
@@ -114,6 +115,43 @@ def test_custom_policy_has_no_value_count_limit(client, admin_headers, owner):
     )
     assert created.status_code == 201, created.text
     assert created.json()["parsed_document"]["values"] == values
+
+
+def test_densest_maximum_size_document_is_accepted(client, admin_headers, owner):
+    # A flow list of one-digit values is the most values per source byte a
+    # document without aliases can have; it must stay within the budget.
+    count = (MAX_POLICY_BYTES - len('{"v":[]}')) // 2
+    document = '{"v":[' + ",".join(["1"] * count) + "]}"
+    assert len(document.encode("utf-8")) <= MAX_POLICY_BYTES
+    created = create_policy(client, admin_headers, owner, "dense-policy", document=document)
+    assert created.status_code == 201, created.text
+    assert len(created.json()["parsed_document"]["v"]) == count
+
+
+def test_yaml_anchor_reuse_within_budget_is_accepted(client, admin_headers, owner):
+    document = (
+        "defaults: &defaults\n  severity: high\n  paths: [src/, lib/]\n"
+        + "".join(f"rule{i}:\n  <<: *defaults\n  id: rule-{i}\n" for i in range(50))
+    )
+    created = create_policy(client, admin_headers, owner, "anchored-policy", "yaml", document)
+    assert created.status_code == 201, created.text
+    assert created.json()["parsed_document"]["rule7"] == {
+        "severity": "high", "paths": ["src/", "lib/"], "id": "rule-7",
+    }
+
+
+def test_yaml_alias_expansion_is_rejected_quickly(client, admin_headers, owner):
+    # 332 bytes that expand to 10**9 values ("billion laughs").
+    levels = ["a: &a [x,x,x,x,x,x,x,x,x,x]"] + [
+        f"{chr(98 + i)}: &{chr(98 + i)} [" + ",".join([f"*{chr(97 + i)}"] * 10) + "]" for i in range(8)
+    ]
+    document = "\n".join(levels) + "\n"
+    assert len(document.encode("utf-8")) < 400
+    started = time.monotonic()
+    response = create_policy(client, admin_headers, owner, "alias-bomb", "yaml", document)
+    assert time.monotonic() - started < 5
+    assert response.status_code == 422
+    assert "excessive YAML alias reuse" in response.json()["detail"]
 
 
 @pytest.mark.parametrize(
