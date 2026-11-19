@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from app.services.custom_policies import MAX_POLICY_BYTES
+from app.services.custom_policies import MAX_POLICY_BYTES, parse_custom_policy
 
 
 def create_owner(client, headers, name, slug):
@@ -79,7 +79,7 @@ def test_admin_creates_and_updates_json_and_yaml_custom_policies(client, admin_h
     assert all("parsed_document" not in item for item in gate_policies.json())
 
 
-def test_custom_policy_accepts_256_kib_and_rejects_larger_utf8_documents(
+def test_custom_policy_accepts_maximum_size_and_rejects_larger_utf8_documents(
     client, admin_headers, owner,
 ):
     prefix = '{"payload":"'
@@ -117,15 +117,14 @@ def test_custom_policy_has_no_value_count_limit(client, admin_headers, owner):
     assert created.json()["parsed_document"]["values"] == values
 
 
-def test_densest_maximum_size_document_is_accepted(client, admin_headers, owner):
+def test_densest_maximum_size_document_is_within_the_expansion_budget():
     # A flow list of one-digit values is the most values per source byte a
     # document without aliases can have; it must stay within the budget.
+    # Exercised at the parser so the suite does not render millions of values.
     count = (MAX_POLICY_BYTES - len('{"v":[]}')) // 2
     document = '{"v":[' + ",".join(["1"] * count) + "]}"
     assert len(document.encode("utf-8")) <= MAX_POLICY_BYTES
-    created = create_policy(client, admin_headers, owner, "dense-policy", document=document)
-    assert created.status_code == 201, created.text
-    assert len(created.json()["parsed_document"]["v"]) == count
+    assert len(parse_custom_policy("json", document)["v"]) == count
 
 
 def test_yaml_anchor_reuse_within_budget_is_accepted(client, admin_headers, owner):

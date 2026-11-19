@@ -8,7 +8,7 @@ import yaml
 from fastapi import HTTPException, Response, status
 
 
-MAX_POLICY_BYTES = 256 * 1024
+MAX_POLICY_BYTES = 10 * 1024 * 1024
 MAX_POLICY_DEPTH = 32
 # Floor for the expanded-value budget below, so small documents may still
 # reuse YAML anchors freely.
